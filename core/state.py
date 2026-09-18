@@ -143,6 +143,8 @@ class TaskContext:
     failed_sources: List[str] = field(default_factory=list)
     research_notes: List[str] = field(default_factory=list)
     source_conflicts: List["SourceConflict"] = field(default_factory=list)
+    # Phase 14 Advanced Memory State
+    relevant_memories: List[Any] = field(default_factory=list)
     source_relationships: Dict[str, List[str]] = field(default_factory=dict)
     research_report: Optional["ResearchReport"] = None
     # Phase 5 Visual Understanding & Computer Interaction State

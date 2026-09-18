@@ -46,6 +46,10 @@ class EventType(str, Enum):
     BLENDER_CHANGED = "blender_changed"
     CYBER_STATE_CHANGED = "cyber_state_changed"
     WORLD_STATE_CHANGED = "world_state_changed"
+    MEMORY_CREATED = "memory_created"
+    MEMORY_UPDATED = "memory_updated"
+    MEMORY_CONFLICT = "memory_conflict"
+    MEMORY_DELETED = "memory_deleted"
     CUSTOM = "custom"
 
 

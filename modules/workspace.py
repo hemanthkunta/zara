@@ -1041,6 +1041,27 @@ class ProjectManager:
             return None
 
     # -------------------------------------------------------------
+    # Project Memory Persistence & Scoped Queries
+    # -------------------------------------------------------------
+    def get_project_memories(self, memory_store: Optional[Any] = None) -> List[Any]:
+        """Fetch all memories explicitly scoped to this project."""
+        if not self.project:
+            return []
+        if memory_store is not None and hasattr(memory_store, "get_memories_by_project"):
+            return memory_store.get_memories_by_project(self.project.project_id)
+        return []
+
+    def export_project_memories(self, memory_store: Any, output_path: Optional[Path] = None) -> Path:
+        """Export project memories to a JSON file in the project workspace or given path."""
+        if not self.project:
+            raise RuntimeError("Project not initialized")
+        out_file = output_path or (self.zara_dir / "memories_export.json")
+        items = self.get_project_memories(memory_store)
+        data = [i.to_dict() if hasattr(i, "to_dict") else dict(i) for i in items]
+        _atomic_write_json(out_file, data)
+        return out_file
+
+    # -------------------------------------------------------------
     # Task Management & DAG Integration
     # -------------------------------------------------------------
     def create_task(

@@ -239,6 +239,27 @@
         </div>
       </section>
 
+      <!-- Long-Term Memory & Personalization Panel -->
+      <section class="card panel-memory">
+        <div class="card-header">
+          <h3>Long-Term Memory</h3>
+          <span id="memory-count-badge" class="tag tag-info">0 Items</span>
+        </div>
+        <div class="card-body">
+          <div class="memory-search-bar" style="display: flex; gap: 6px; margin-bottom: 8px;">
+            <input type="text" id="memory-search-input" placeholder="Search memories..." style="flex: 1; padding: 4px 8px; border-radius: 4px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 11px;" />
+            <button id="btn-search-memory" class="btn btn-xs btn-ghost">Search</button>
+          </div>
+          <div id="memory-stats-summary" class="memory-stats-text" style="font-size: 11px; color: #a0aec0; margin-bottom: 8px;">
+            <span>Active: <strong id="mem-stat-active">0</strong></span> |
+            <span>Conflicts: <strong id="mem-stat-conflicts">0</strong></span>
+          </div>
+          <div id="memory-items-list" class="memory-list-container" style="max-height: 140px; overflow-y: auto; font-size: 11px;">
+            <div class="memory-empty-state" style="color: #718096; padding: 4px 0;">No recent memories.</div>
+          </div>
+        </div>
+      </section>
+
       <!-- Live Event Timeline -->
       <section class="card panel-events">
         <div class="card-header">

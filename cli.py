@@ -3,6 +3,7 @@ ZARA Command-Line Interface (CLI): Interactive console for ZARA Autonomous Agent
 Supports run, chat (conversational mode), gui, tools, memory, recover, and test.
 """
 import sys
+import json
 import argparse
 import subprocess
 from pathlib import Path
@@ -129,27 +130,110 @@ def cmd_gui(args):
 
 def cmd_memory(args):
     store = MemoryStore()
-    if args.query:
-        print(f"\n{Colors.CYAN}Searching ZARA Memory for:{Colors.END} '{args.query}'\n")
-        results = store.search_lessons(args.query, limit=5)
-        if not results:
-            print("No matching past lessons found.")
+    try:
+        if getattr(args, "stats", False):
+            stats = store.get_stats()
+            print(f"\n{Colors.CYAN}{Colors.BOLD}=== ZARA Memory Subsystem Stats ==={Colors.END}")
+            print(f"Total Memories: {stats.total_memories}")
+            print(f"Active Memories: {stats.active_memories}")
+            print(f"Conflicts Recorded: {stats.conflict_count}")
+            print(f"Average Confidence: {stats.average_confidence:.2f}")
+            print(f"\n{Colors.BOLD}By Scope:{Colors.END}")
+            for sc, cnt in stats.by_scope.items():
+                print(f"  - {sc}: {cnt}")
+            print(f"\n{Colors.BOLD}By Type:{Colors.END}")
+            for tp, cnt in stats.by_type.items():
+                print(f"  - {tp}: {cnt}")
+            print("-" * 50)
             return
-        for r in results:
-            print(f"{Colors.BOLD}{r['header']}{Colors.END}")
-            if r.get("approach"):
-                print(f"  - Approach: {r['approach']}")
-            if r.get("result"):
-                print(f"  - Result: {r['result']}")
-            if r.get("lesson"):
-                print(f"  - Lesson: {r['lesson']}")
-            print("-" * 50)
-    else:
-        print(f"\n{Colors.CYAN}Reading all entries in {MEMORY_FILE}:{Colors.END}\n")
-        entries = store.get_all_entries()
-        for e in entries:
-            print(e)
-            print("-" * 50)
+
+        if getattr(args, "conflicts", False):
+            confs = store.get_conflicts()
+            print(f"\n{Colors.YELLOW}{Colors.BOLD}=== Recorded Memory Conflicts ({len(confs)}) ==={Colors.END}")
+            if not confs:
+                print("No memory conflicts recorded.")
+                return
+            for c in confs:
+                print(f"[{c.conflict_id}] Status: {c.status.value} (Type: {c.conflict_type})")
+                print(f"  Description: {c.description}")
+                print(f"  Item A: {c.item_a_id} | Item B: {c.item_b_id}")
+                if c.resolution_note:
+                    print(f"  Resolution: {c.resolution_note}")
+                print("-" * 50)
+            return
+
+        if getattr(args, "export", None):
+            export_path = Path(args.export)
+            items = store.retrieve(query="", limit=500, min_confidence=0.0)
+            data = [i.to_dict() for i in items]
+            export_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            print(f"{Colors.GREEN}Successfully exported {len(data)} memories to {export_path}{Colors.END}")
+            return
+
+        if getattr(args, "recent", False):
+            items = store.retrieve(query="", limit=10, min_confidence=0.0)
+            print(f"\n{Colors.CYAN}{Colors.BOLD}=== Recent Memories ({len(items)}) ==={Colors.END}\n")
+            for m in items:
+                print(f"[{m.type.value}] ({m.scope.value}) Conf: {m.confidence:.2f} | Imp: {m.importance:.2f}")
+                print(f"  {m.content}")
+                print("-" * 50)
+            return
+
+        if args.query:
+            print(f"\n{Colors.CYAN}Searching ZARA Memory for:{Colors.END} '{args.query}'\n")
+            from modules.memory import MemoryScope, MemoryType
+            scope_enum = None
+            if getattr(args, "scope", None):
+                try:
+                    scope_enum = MemoryScope(args.scope.upper())
+                except ValueError:
+                    pass
+            type_enum = None
+            if getattr(args, "type", None):
+                try:
+                    type_enum = MemoryType(args.type.upper())
+                except ValueError:
+                    pass
+            proj_id = getattr(args, "project", None)
+
+            # Advanced hybrid retrieval
+            adv_results = store.retrieve(
+                query=args.query,
+                project_id=proj_id,
+                scope=scope_enum,
+                memory_type=type_enum,
+                limit=5
+            )
+            if adv_results:
+                print(f"{Colors.GREEN}Structured Long-Term Memories ({len(adv_results)}):{Colors.END}")
+                for m in adv_results:
+                    print(f"[{m.type.value}] ({m.scope.value}) Conf: {m.confidence:.2f} | Imp: {m.importance:.2f}")
+                    print(f"  {m.content}")
+                    print("-" * 50)
+
+            # Legacy reflection search
+            results = store.search_lessons(args.query, limit=5)
+            if results:
+                print(f"\n{Colors.BLUE}Past Execution Reflections ({len(results)}):{Colors.END}")
+                for r in results:
+                    print(f"{Colors.BOLD}{r['header']}{Colors.END}")
+                    if r.get("approach"):
+                        print(f"  - Approach: {r['approach']}")
+                    if r.get("result"):
+                        print(f"  - Result: {r['result']}")
+                    if r.get("lesson"):
+                        print(f"  - Lesson: {r['lesson']}")
+                    print("-" * 50)
+            if not adv_results and not results:
+                print("No matching memories or lessons found.")
+        else:
+            print(f"\n{Colors.CYAN}Reading all entries in {MEMORY_FILE}:{Colors.END}\n")
+            entries = store.get_all_entries()
+            for e in entries:
+                print(e)
+                print("-" * 50)
+    finally:
+        store.close()
 
 def cmd_voice(args):
     print_banner()
@@ -708,6 +792,13 @@ def main():
     # memory command
     mem_p = subparsers.add_parser("memory", help="Inspect or search ZARA's self-learning memory log")
     mem_p.add_argument("query", type=str, nargs="?", default="", help="Search query")
+    mem_p.add_argument("--stats", action="store_true", help="Display memory statistics")
+    mem_p.add_argument("--conflicts", action="store_true", help="List detected memory conflicts")
+    mem_p.add_argument("--recent", action="store_true", help="Show recent memories")
+    mem_p.add_argument("--project", type=str, default=None, help="Filter by project ID")
+    mem_p.add_argument("--scope", type=str, default=None, help="Filter by scope (GLOBAL, USER, PROJECT, TASK, SESSION)")
+    mem_p.add_argument("--type", type=str, default=None, help="Filter by memory type")
+    mem_p.add_argument("--export", type=str, default=None, help="Export memories to file path")
 
     # voice-test command
     subparsers.add_parser("voice-test", help="Test female TTS voice synthesis")

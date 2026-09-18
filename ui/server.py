@@ -608,12 +608,137 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
         else:
             results = eng.memory.get_all_entries() if hasattr(eng.memory, "get_all_entries") else []
 
+        stats = eng.memory.get_stats().to_dict() if hasattr(eng.memory, "get_stats") else {}
+
         return redact_sensitive_data({
             "entries": results[:20],
             "count": len(results),
             "lessons_count": len(results),
-            "recent_lessons": results[:20]
+            "recent_lessons": results[:20],
+            "stats": stats
         })
+
+    @app.get("/api/memory/stats")
+    async def get_memory_stats():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "memory") or not eng.memory:
+            return {"total_memories": 0, "by_type": {}, "by_scope": {}, "active_memories": 0, "conflict_count": 0}
+        if hasattr(eng.memory, "get_stats"):
+            return eng.memory.get_stats().to_dict()
+        return {"total_memories": 0}
+
+    @app.get("/api/memory/search")
+    async def search_memory(
+        q: str = Query(..., description="Search query"),
+        project_id: Optional[str] = Query(None),
+        scope: Optional[str] = Query(None),
+        type: Optional[str] = Query(None),
+        limit: int = Query(10, ge=1, le=50)
+    ):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "memory") or not eng.memory:
+            return {"results": [], "count": 0}
+
+        clean_q = sanitize_xss(q)
+        from modules.memory import MemoryScope, MemoryType
+        scope_enum = None
+        if scope:
+            try:
+                scope_enum = MemoryScope(scope.upper())
+            except ValueError:
+                pass
+        type_enum = None
+        if type:
+            try:
+                type_enum = MemoryType(type.upper())
+            except ValueError:
+                pass
+
+        if hasattr(eng.memory, "retrieve"):
+            items = eng.memory.retrieve(
+                query=clean_q,
+                project_id=project_id,
+                scope=scope_enum,
+                memory_type=type_enum,
+                limit=limit
+            )
+            data = [item.to_dict() for item in items]
+            return redact_sensitive_data({"results": data, "count": len(data)})
+        return {"results": [], "count": 0}
+
+    @app.get("/api/memory/conflicts")
+    async def get_memory_conflicts(status: Optional[str] = Query(None)):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "memory") or not eng.memory:
+            return {"conflicts": [], "count": 0}
+        from modules.memory import ConflictStatus
+        st = None
+        if status:
+            try:
+                st = ConflictStatus(status.upper())
+            except ValueError:
+                pass
+        if hasattr(eng.memory, "get_conflicts"):
+            confs = eng.memory.get_conflicts(status=st)
+            return redact_sensitive_data({"conflicts": [c.to_dict() for c in confs], "count": len(confs)})
+        return {"conflicts": [], "count": 0}
+
+    @app.post("/api/memory/explicit")
+    async def store_explicit_memory(payload: Dict[str, Any] = Body(...)):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "memory") or not eng.memory:
+            raise HTTPException(status_code=503, detail="Memory subsystem offline")
+        content = payload.get("content", "").strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="Content cannot be empty")
+        from modules.memory import MemoryItem, MemoryType, MemoryScope, MemorySource, contains_secret, scrub_text
+        if contains_secret(content):
+            raise HTTPException(status_code=400, detail="Content rejected: contains credentials or sensitive secret")
+
+        m_type_str = payload.get("type", "PREFERENCE").upper()
+        m_scope_str = payload.get("scope", "USER").upper()
+        try:
+            m_type = MemoryType(m_type_str)
+        except ValueError:
+            m_type = MemoryType.PREFERENCE
+        try:
+            m_scope = MemoryScope(m_scope_str)
+        except ValueError:
+            m_scope = MemoryScope.USER
+
+        item = MemoryItem(
+            type=m_type,
+            content=scrub_text(content),
+            scope=m_scope,
+            confidence=float(payload.get("confidence", 0.95)),
+            importance=float(payload.get("importance", 0.8)),
+            source=MemorySource.USER_STATED,
+            project_id=payload.get("project_id"),
+            task_id=payload.get("task_id"),
+            tags=payload.get("tags", ["user_explicit"])
+        )
+        stored = eng.memory.store_memory(item)
+        return {"status": "STORED", "memory": stored.to_dict()}
+
+    @app.delete("/api/memory/{memory_id}")
+    async def delete_memory(memory_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "memory") or not eng.memory:
+            raise HTTPException(status_code=503, detail="Memory subsystem offline")
+        success = eng.memory.delete_memory(memory_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        return {"status": "DELETED", "memory_id": memory_id}
+
+    @app.get("/api/memory/{memory_id}")
+    async def get_single_memory(memory_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "memory") or not eng.memory:
+            raise HTTPException(status_code=503, detail="Memory subsystem offline")
+        item = eng.memory.get_memory(memory_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        return redact_sensitive_data({"memory": item.to_dict()})
 
     @app.get("/api/schedules")
     async def get_schedules():

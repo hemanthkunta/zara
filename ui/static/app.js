@@ -61,6 +61,14 @@
   const btnResumeProj = document.getElementById("btn-resume-proj");
   const btnCancelProj = document.getElementById("btn-cancel-proj");
 
+  // Memory Elements
+  const memoryCountBadge = document.getElementById("memory-count-badge");
+  const memorySearchInput = document.getElementById("memory-search-input");
+  const btnSearchMemory = document.getElementById("btn-search-memory");
+  const memStatActive = document.getElementById("mem-stat-active");
+  const memStatConflicts = document.getElementById("mem-stat-conflicts");
+  const memoryItemsList = document.getElementById("memory-items-list");
+
   // Command Form
   const commandForm = document.getElementById("command-form");
   const commandInput = document.getElementById("command-input");
@@ -527,15 +535,65 @@
     });
   });
 
+  // Memory fetcher
+  const fetchMemory = async (query = "") => {
+    try {
+      const url = query ? `/api/memory/search?q=${encodeURIComponent(query)}` : "/api/memory";
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      if (data.stats) {
+        if (memStatActive) memStatActive.textContent = data.stats.active_memories || 0;
+        if (memStatConflicts) memStatConflicts.textContent = data.stats.conflict_count || 0;
+        if (memoryCountBadge) memoryCountBadge.textContent = `${data.stats.total_memories || 0} Items`;
+      } else if (data.results) {
+        if (memoryCountBadge) memoryCountBadge.textContent = `${data.count || 0} Results`;
+      }
+
+      if (!memoryItemsList) return;
+      const items = data.results || (data.recent_lessons ? data.recent_lessons.map(l => ({ content: typeof l === 'string' ? l : (l.lesson || l.header), type: 'LESSON' })) : []);
+      if (!items || items.length === 0) {
+        memoryItemsList.innerHTML = '<div class="memory-empty-state" style="color: #718096; padding: 4px 0;">No memories found.</div>';
+        return;
+      }
+
+      memoryItemsList.innerHTML = items.slice(0, 5).map(m => {
+        const typeStr = escapeHtml(m.type || "INFO");
+        const contentStr = escapeHtml(m.content || m.lesson || JSON.stringify(m));
+        return `<div style="padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+          <span class="tag tag-dim" style="font-size: 9px; margin-right: 4px;">${typeStr}</span>
+          <span>${contentStr}</span>
+        </div>`;
+      }).join("");
+    } catch (err) {
+      console.error("fetchMemory failed:", err);
+    }
+  };
+
+  if (btnSearchMemory && memorySearchInput) {
+    btnSearchMemory.addEventListener("click", () => {
+      fetchMemory(memorySearchInput.value.trim());
+    });
+    memorySearchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        fetchMemory(memorySearchInput.value.trim());
+      }
+    });
+  }
+
   // Initial Boot
   connectWebSocket();
   fetchStatus();
   fetchWorld();
   fetchTasks();
   fetchProject();
+  fetchMemory();
 
   // Periodic status poll (every 5 seconds)
   setInterval(() => {
     fetchStatus();
+    fetchMemory();
   }, 5000);
 })();

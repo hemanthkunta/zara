@@ -64,6 +64,7 @@ from tools.browser import (
     CollectSourceTool
 )
 from modules.memory import MemoryStore
+from modules.memory_extractor import MemoryExtractor
 from modules.execution import ExecutionEngine
 from modules.coding import CodingModule
 from modules.debugging import DebuggingModule
@@ -167,6 +168,7 @@ class ZaraEngine:
         # Subsystems
         self.brain = LLMRouter()
         self.memory = MemoryStore()
+        self.memory_extractor = MemoryExtractor()
         self.execution = ExecutionEngine(str(self.workspace_root), use_docker=use_docker)
         self.coding = CodingModule(str(self.workspace_root))
         self.debugging = DebuggingModule()
@@ -362,7 +364,19 @@ class ZaraEngine:
         """Generate hierarchical plan, validate quality and safety, estimate cost, and persist."""
         proj_id = project_id or (self.project_manager.project.project_id if self.project_manager and self.project_manager.project else "proj-default")
         world_state = self.world_model.current_state if hasattr(self, "world_model") and self.world_model else None
-        tasks = custom_tasks if custom_tasks is not None else HierarchicalPlanner.create_hierarchical_plan(goal, proj_id, world_state=world_state)
+        relevant_memories = []
+        if hasattr(self.memory, "retrieve"):
+            try:
+                relevant_memories = self.memory.retrieve(
+                    query=goal.desired_outcome or goal.normalized_goal,
+                    project_id=proj_id,
+                    limit=5
+                )
+            except Exception:
+                relevant_memories = []
+        tasks = custom_tasks if custom_tasks is not None else HierarchicalPlanner.create_hierarchical_plan(
+            goal, proj_id, world_state=world_state, relevant_memories=relevant_memories
+        )
         budget = self.project_manager.project.budget if self.project_manager and self.project_manager.project else None
 
         # Scope validation for cybersecurity
@@ -502,11 +516,23 @@ class ZaraEngine:
             f"[{entry['header']}] Lesson: {entry['lesson']}" for entry in past_lessons_raw if entry.get("lesson")
         ]
 
+        # Phase 14 Advanced Memory Retrieval
+        proj_id = self.project_manager.project.project_id if self.project_manager and getattr(self.project_manager, "project", None) else None
+        relevant_memories = []
+        if hasattr(self.memory, "retrieve"):
+            try:
+                relevant_memories = self.memory.retrieve(f"{task} {tag}", project_id=proj_id, limit=5)
+                for mem in relevant_memories:
+                    past_lessons.append(f"[{mem.type.value}] {mem.content}")
+            except Exception:
+                relevant_memories = []
+
         context = TaskContext(
             task=task,
             tag=tag,
             working_dir=str(self.workspace_root),
             past_lessons=past_lessons,
+            relevant_memories=relevant_memories,
             start_time=time.time()
         )
         self._record_event(context, "task_started", extra={"task": task, "tag": tag})
@@ -1355,9 +1381,24 @@ class ZaraEngine:
         return reflection
 
     # 7. PERSIST
-    def persist(self, reflection: Reflection) -> None:
-        """Append reflection to memory/zara_log.md."""
+    def persist(self, reflection: Reflection, project_id: Optional[str] = None) -> None:
+        """Append reflection to memory/zara_log.md and extract structured memories."""
         self.memory.append_reflection(reflection)
+        if hasattr(self, "memory_extractor") and self.memory_extractor:
+            try:
+                pid = project_id or (self.project_manager.project.project_id if self.project_manager and getattr(self.project_manager, "project", None) else None)
+                status = "completed" if "passed" in reflection.result.lower() else "failed"
+                err = reflection.lesson if status == "failed" else None
+                candidates = self.memory_extractor.extract_from_task_result(
+                    task_id=f"refl-{uuid.uuid4().hex[:6]}",
+                    goal=reflection.task,
+                    result={"status": status, "summary": reflection.result, "error": err},
+                    project_id=pid
+                )
+                for item in candidates:
+                    self.memory.store_memory(item)
+            except Exception:
+                pass
 
     # 8. CONTINUE OR REPORT (Full Loop)
     def run_task(
@@ -1745,4 +1786,10 @@ class ZaraEngine:
             "due_jobs_count": len(due_jobs),
             "budget": self.autonomous.budget.to_dict()
         }
+
+    def close(self) -> None:
+        """Cleanly close underlying memory store and resources."""
+        if hasattr(self, "memory") and hasattr(self.memory, "close"):
+            self.memory.close()
+
 

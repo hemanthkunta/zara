@@ -56,7 +56,7 @@ Unlike open-ended prompts that assume success, ZARA operates on a strictly verif
 | **Intelligent Debugger** | `modules/debugging.py` | Traceback parser (file, line, exception type), test reproducer generator, hypothesis builder, and targeted patcher. |
 | **Verifiable Evidence** | `modules/verification.py` | Evidence collector storing SHA-256 output hashes, exit codes, and timestamps for every check. |
 | **Layered Sandbox** | `modules/execution.py` | `Request -> Policy -> Permission -> Sandbox -> Execution -> Audit`. Regex interceptor for destructive commands, Docker container isolation (`--network none`), memory/CPU limits. |
-| **Hierarchical Memory** | `modules/memory.py` | Short-term context, episodic store (`memory/episodes.jsonl`), user preferences (`memory/preferences.json`), and append-only lessons (`memory/zara_log.md`). |
+| **Hierarchical Memory** | `modules/memory.py`, `modules/memory_extractor.py` | Phase 14 Advanced Memory: 12 structured memory categories, 5 scopes (Global, User, Project, Task, Session), strict cross-project isolation, hybrid vector + lexical retrieval, deduplication, conflict resolution, secret scrubbing, and temporal decay. |
 | **Self-Improvement** | `modules/self_improvement.py` | Evaluates completed tasks and proposes prompt, workflow, or tool refinements to human review queue. |
 | **Voice Interface** | `modules/voice.py` | Zero-dependency native macOS female TTS (`say -v Samantha`) with speech interruption, sanitization, and STT microphone adapter. |
 | **Conversational Mode** | `core/conversation.py` | Multi-turn conversational REPL (`./zara.py chat`) retaining task context across prompts. |
@@ -111,13 +111,25 @@ Start an interactive chat session with ZARA:
 ./zara.py tools
 ```
 
-### Inspect or Search Self-Learning Memory Log
+### Inspect, Search, and Manage Long-Term Memory (Phase 14)
 ```bash
-# Read all entries
+# Read all entries / search lessons
 ./zara.py memory
 
-# Search memory for lessons on a specific topic
-./zara.py memory "unit test verification"
+# Search memory with query and filters
+./zara.py memory "unit test verification" --type INSTRUCTION --scope GLOBAL
+
+# Subsystem statistics (breakdowns by category and scope)
+./zara.py memory --stats
+
+# View detected contradictions and conflicts
+./zara.py memory --conflicts
+
+# View most recent memories
+./zara.py memory --recent 10
+
+# Export project or global memories to JSON
+./zara.py memory --export memory_backup.json
 ```
 
 ### Inspect Task Recovery Checkpoints
@@ -182,7 +194,8 @@ Start an interactive chat session with ZARA:
 │   ├── debugging.py             # Traceback parsing, hypothesis builder & patcher
 │   ├── execution.py             # Layered process runner (Request->Policy->Sandbox->Exec)
 │   ├── verification.py          # Evidence recorder & syntax/command verifier
-│   ├── memory.py                # Multi-tier memory store (lessons, episodes, preferences)
+│   ├── memory.py                # Advanced long-term memory store (Phase 14)
+│   ├── memory_extractor.py      # Automated pattern & preference extractor
 │   ├── self_improvement.py      # Improvement proposal generator
 │   ├── voice.py                 # Female TTS voice synthesizer & STT adapter
 │   ├── vision.py                # Image & screenshot inspector
@@ -194,10 +207,12 @@ Start an interactive chat session with ZARA:
 │   └── orchestrator.py          # Multi-task queue state manager
 ├── gui/
 │   └── app.py                   # Desktop GUI with state machine visualization
+├── ui/                          # Unified Command Center & Control UI (Phase 13/14)
 ├── memory/
 │   ├── zara_log.md              # Human-readable append-only lessons
 │   ├── episodes.jsonl           # Structured episodic memory
-│   └── preferences.json         # User preferences store
+│   ├── preferences.json         # User preferences store
+│   └── vectors.db               # SQLite hybrid vector & structured memory index
 ├── queue/
 │   ├── job_applications/        # Human-in-the-loop review queue
 │   ├── improvement_proposals/   # Self-improvement proposals queue
@@ -210,5 +225,8 @@ Start an interactive chat session with ZARA:
     ├── test_zara_core.py        # Core loop and integration tests
     ├── test_llm_brain.py        # Brain providers and router tests
     ├── test_tool_registry.py    # Tool validation, traversal & permission tests
-    └── test_specialized_modules.py # Git, Blender, Research, Recovery, Security tests
+    ├── test_specialized_modules.py # Git, Blender, Research, Recovery, Security tests
+    ├── test_memory_advanced.py  # Phase 14 memory CRUD, decay & conflicts
+    ├── test_memory_scoping.py   # Phase 14 scoping, isolation & privacy
+    └── test_memory_integration.py # Phase 14 full-system integration tests
 ```

@@ -148,6 +148,7 @@ class ContextManager:
         decisions: Optional[List[DecisionRecord]] = None,
         artifacts: Optional[List[ArtifactRecord]] = None,
         task_context: Optional[TaskContext] = None,
+        memories: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         """Assemble context strictly ordered by priority:
 
@@ -155,7 +156,8 @@ class ContextManager:
         2. Current Project State & Goal
         3. Relevant Decisions
         4. Relevant Artifacts
-        5. Compact Historical Summary
+        5. Relevant Long-Term Memories
+        6. Compact Historical Summary
         """
         context: Dict[str, Any] = {}
 
@@ -208,7 +210,14 @@ class ContextManager:
                 for a in artifacts[-3:]
             ]
 
-        # 5. Compact Summary (Priority 5)
+        # 5. Relevant Long-Term Memories (Priority 5)
+        if memories:
+            context["memories"] = [
+                m.to_dict() if hasattr(m, "to_dict") else {"content": str(m)}
+                for m in memories[:5]
+            ]
+
+        # 6. Compact Summary (Priority 6)
         if self.compact_summaries:
             context["latest_summary"] = self.compact_summaries[-1].to_dict()
 
