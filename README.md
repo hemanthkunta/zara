@@ -68,6 +68,7 @@ Unlike open-ended prompts that assume success, ZARA operates on a strictly verif
 | **Authorized Security Lab** | `modules/security.py` | Scope-gated defensive port scanner and HTTP security header auditor enforcing `config/security_scope.json`. |
 | **Job Application Drafter**| `modules/job_hunter.py` | Tailored application packet and cover letter drafter outputting to `queue/job_applications/` with `pending_human_approval`. |
 | **Desktop GUI** | `gui/app.py` | Native dark-themed desktop interface displaying conversation, live state pipeline, memory, and checkpoints. |
+| **Command Center UI** | `ui/server.py`, `ui/static/` | Phase 13 visual command center dashboard with FastAPI backend, WebSockets event streaming, multimodal world model inspector, task DAG, screen perception feed, and subsystem control. |
 | **Observability & Audit** | `core/observability.py` | Structured JSONL audit log (`logs/audit.jsonl`) with automatic secret scrubbing. |
 | **Crash Recovery** | `core/recovery.py` | Checkpoints task context to `checkpoints/` after every verified step, enabling safe resume from last verified step. |
 
@@ -91,6 +92,18 @@ Start an interactive chat session with ZARA:
 ### Launch the Desktop GUI
 ```bash
 ./zara.py gui
+```
+
+### Launch Unified Command Center & Control UI (Web / Browser)
+```bash
+# Launch server and open browser
+./zara.py ui --open
+
+# Custom port
+./zara.py ui --port 9000
+
+# Inspect UI server status
+./zara.py ui status
 ```
 
 ### List Registered Tools and Risk Levels

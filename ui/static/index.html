@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZARA — Unified Command Center</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <!-- Header / System Status Bar -->
+  <header class="top-nav">
+    <div class="nav-left">
+      <div class="brand">
+        <span class="brand-core">ZARA</span>
+        <span class="brand-sub">COMMAND CENTER</span>
+      </div>
+      <div class="badge-group">
+        <span id="connection-badge" class="badge badge-pulse offline">CONNECTING...</span>
+        <span id="autonomous-badge" class="badge badge-dim">AUTONOMOUS: OFF</span>
+        <span id="voice-badge" class="badge badge-dim">VOICE: IDLE</span>
+      </div>
+    </div>
+
+    <div class="nav-center">
+      <div class="project-pill">
+        <span class="label">PROJECT:</span>
+        <span id="active-project-name" class="value">No Active Project</span>
+      </div>
+      <div class="task-pill">
+        <span class="label">ACTIVE TASK:</span>
+        <span id="active-task-desc" class="value">Idle</span>
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <div class="health-metrics">
+        <span class="metric">CPU <strong id="metric-cpu">--%</strong></span>
+        <span class="metric">RAM <strong id="metric-ram">--%</strong></span>
+        <span class="metric">CONF <strong id="metric-conf">--%</strong></span>
+      </div>
+      <div class="quick-actions">
+        <button id="btn-refresh-world" class="btn btn-sm btn-ghost" title="Refresh World Model">↻ World</button>
+        <button id="btn-capture-screen" class="btn btn-sm btn-ghost" title="Capture Live Screen">📷 Screen</button>
+        <button id="btn-voice-interrupt" class="btn btn-sm btn-warning" title="Interrupt Voice Playback">⏹ Interrupt</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Global Notification Banner (for Plan Approvals or Alerts) -->
+  <div id="approval-banner" class="approval-banner hidden">
+    <div class="banner-content">
+      <span class="banner-icon">⚠️</span>
+      <span id="approval-banner-text" class="banner-text">Plan requires operator approval before execution.</span>
+    </div>
+    <div class="banner-actions">
+      <button id="btn-approve-plan" class="btn btn-sm btn-success">Approve Plan</button>
+      <button id="btn-dismiss-approval" class="btn btn-sm btn-ghost">Dismiss</button>
+    </div>
+  </div>
+
+  <!-- Main Natural Language Command Console -->
+  <section class="command-section">
+    <form id="command-form" class="command-bar">
+      <div class="command-input-wrapper">
+        <span class="prompt-symbol">❯</span>
+        <input 
+          type="text" 
+          id="command-input" 
+          placeholder="Transmit instruction to ZARA (e.g. 'audit security of localhost:8000', 'create website', 'render cube in blender')..."
+          autocomplete="off"
+          required
+        />
+      </div>
+      <div class="command-buttons">
+        <button type="submit" id="btn-submit-cmd" class="btn btn-primary">Transmit</button>
+        <button type="button" id="btn-voice-toggle" class="btn btn-secondary" title="Simulate Voice Input">🎤 Voice</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Main Dashboard Grid -->
+  <main class="dashboard-grid">
+    <!-- Column 1: World Model & Vision -->
+    <div class="grid-column col-world-vision">
+      <!-- Multimodal World State Panel -->
+      <section class="card panel-world">
+        <div class="card-header">
+          <h3>Multimodal World State</h3>
+          <span id="world-confidence-tag" class="tag tag-info">Conf: --</span>
+        </div>
+        <div class="card-body">
+          <div class="state-row">
+            <span class="state-label">Frontmost App:</span>
+            <span id="world-active-app" class="state-value">Unknown</span>
+          </div>
+          <div class="state-row">
+            <span class="state-label">Window Title:</span>
+            <span id="world-active-window" class="state-value truncate">Unknown</span>
+          </div>
+          <div class="state-row">
+            <span class="state-label">Entities / Relations:</span>
+            <span id="world-graph-stats" class="state-value">0 entities / 0 relations</span>
+          </div>
+          <div class="state-row">
+            <span class="state-label">Last Observation:</span>
+            <span id="world-last-obs" class="state-value">Never</span>
+          </div>
+
+          <div class="modality-freshness">
+            <h4>Modality Freshness</h4>
+            <div id="freshness-grid" class="freshness-chips">
+              <span class="chip chip-dim" data-modality="screen">Screen</span>
+              <span class="chip chip-dim" data-modality="filesystem">Files</span>
+              <span class="chip chip-dim" data-modality="browser">Browser</span>
+              <span class="chip chip-dim" data-modality="terminal">Terminal</span>
+              <span class="chip chip-dim" data-modality="blender">Blender</span>
+              <span class="chip chip-dim" data-modality="cyber">Cyber</span>
+            </div>
+          </div>
+
+          <div class="world-actions">
+            <button id="btn-view-diff" class="btn btn-xs btn-outline">Show World Diff</button>
+            <div id="diff-container" class="diff-box hidden">
+              <pre id="diff-content">No active diff.</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live Vision & Screen Feed Panel -->
+      <section class="card panel-screen">
+        <div class="card-header">
+          <h3>Live Screen Perception</h3>
+          <span id="screen-time-tag" class="tag tag-dim">Last: None</span>
+        </div>
+        <div class="card-body screen-body">
+          <div class="screen-wrapper">
+            <img id="screen-preview" src="/api/screenshot/latest" alt="Live Screen Stream" />
+            <div id="screen-placeholder" class="screen-fallback hidden">No screenshot captured</div>
+          </div>
+          <div class="screen-meta">
+            <span id="screen-info" class="text-muted">Resolution: Desktop Native</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Column 2: Plan, DAG, & Execution Activity -->
+    <div class="grid-column col-tasks">
+      <!-- Task DAG & Planning Panel -->
+      <section class="card panel-tasks">
+        <div class="card-header">
+          <h3>Hierarchical Tasks & Plan</h3>
+          <div class="card-controls">
+            <span id="plan-status-badge" class="tag tag-secondary">NO ACTIVE PLAN</span>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="goal-box">
+            <span class="goal-label">Current Goal:</span>
+            <p id="plan-goal-text" class="goal-text">No active mission or hierarchical plan.</p>
+          </div>
+
+          <div class="progress-container">
+            <div class="progress-bar-bg">
+              <div id="plan-progress-fill" class="progress-bar-fill" style="width: 0%;"></div>
+            </div>
+            <span id="plan-progress-text" class="progress-text">0% Complete (0/0)</span>
+          </div>
+
+          <div class="task-list-section">
+            <h4>DAG Task Breakdown</h4>
+            <ul id="dag-task-list" class="dag-list">
+              <li class="empty-placeholder">No active tasks in DAG queue.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tool & Terminal Execution Stream -->
+      <section class="card panel-terminal">
+        <div class="card-header">
+          <h3>Tool & Terminal Activity</h3>
+          <span class="tag tag-dim">LIVE STDOUT</span>
+        </div>
+        <div class="card-body terminal-body">
+          <div id="terminal-feed" class="terminal-container">
+            <div class="terminal-line system">[SYSTEM] ZARA Command Center v13 initialized.</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Column 3: Projects, Cyber/Blender, Schedule & Events -->
+    <div class="grid-column col-meta">
+      <!-- Project & Workspace Explorer -->
+      <section class="card panel-project">
+        <div class="card-header">
+          <h3>Workspace & Project</h3>
+          <span id="project-status-badge" class="tag tag-dim">IDLE</span>
+        </div>
+        <div class="card-body">
+          <div class="project-details">
+            <div class="detail-item"><strong>Name:</strong> <span id="proj-name">None</span></div>
+            <div class="detail-item"><strong>ID:</strong> <span id="proj-id">--</span></div>
+            <div class="detail-item"><strong>Root:</strong> <span id="proj-root" class="truncate">--</span></div>
+            <div class="detail-item"><strong>Artifacts:</strong> <span id="proj-artifacts">0</span></div>
+            <div class="detail-item"><strong>Checkpoints:</strong> <span id="proj-checkpoints">0</span></div>
+          </div>
+          <div class="project-btn-group">
+            <button id="btn-pause-proj" class="btn btn-xs btn-outline">Pause</button>
+            <button id="btn-resume-proj" class="btn btn-xs btn-outline">Resume</button>
+            <button id="btn-cancel-proj" class="btn btn-xs btn-danger">Cancel</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Specialized Domains (Cyber Lab & Blender) -->
+      <section class="card panel-domains">
+        <div class="card-header">
+          <h3>Autonomous Domains</h3>
+        </div>
+        <div class="card-body domain-body">
+          <div class="domain-card">
+            <div class="domain-header">
+              <strong>Cybersecurity Lab</strong>
+              <span id="cyber-status-tag" class="tag tag-dim">INACTIVE</span>
+            </div>
+            <p id="cyber-scope-info" class="domain-info">Scope: Strictly Authorized Only</p>
+          </div>
+
+          <div class="domain-card">
+            <div class="domain-header">
+              <strong>Blender 3D Environment</strong>
+              <span id="blender-status-tag" class="tag tag-dim">OFFLINE</span>
+            </div>
+            <p id="blender-scene-info" class="domain-info">Scene: Default Studio</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live Event Timeline -->
+      <section class="card panel-events">
+        <div class="card-header">
+          <h3>Event Stream</h3>
+          <div class="event-filter-chips">
+            <button class="chip-filter active" data-filter="all">All</button>
+            <button class="chip-filter" data-filter="world">World</button>
+            <button class="chip-filter" data-filter="task">Task</button>
+            <button class="chip-filter" data-filter="tool">Tool</button>
+          </div>
+        </div>
+        <div class="card-body events-body">
+          <div id="events-timeline" class="events-container">
+            <div class="event-row system">
+              <span class="event-time">--:--:--</span>
+              <span class="event-msg">ZARA WebSocket stream ready.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

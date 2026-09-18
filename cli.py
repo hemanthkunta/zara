@@ -12,7 +12,7 @@ from core.state import PlanStep, StepStatus, ActionType
 from core.recovery import RecoveryManager
 from modules.memory import MemoryStore
 from modules.voice import VoiceSynthesizer
-from config.settings import MEMORY_FILE, ENABLE_VOICE
+from config.settings import MEMORY_FILE, ENABLE_VOICE, UI_HOST, UI_PORT
 
 class Colors:
     HEADER = '\033[95m'
@@ -629,6 +629,49 @@ def cmd_world(args):
         wm.refresh()
         print(f"{Colors.GREEN}World state refreshed.{Colors.END}")
 
+def cmd_ui(args):
+    import urllib.request
+    import json
+    import webbrowser
+
+    host = getattr(args, "host", None) or UI_HOST
+    port = getattr(args, "port", None) or UI_PORT
+    action = getattr(args, "ui_action", None)
+
+    if action == "status":
+        print(f"\n{Colors.CYAN}{Colors.BOLD}=== ZARA COMMAND CENTER UI STATUS ==={Colors.END}")
+        url = f"http://{host}:{port}/api/health"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ZARA-CLI"})
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                print(f"Status:   {Colors.GREEN}{data.get('status', 'RUNNING').upper()}{Colors.END}")
+                print(f"Endpoint: {Colors.CYAN}http://{host}:{port}{Colors.END}")
+                print(f"Clients:  {data.get('connected_clients', 0)}")
+                print(f"Uptime:   {data.get('uptime_seconds', 0):.1f}s\n")
+                return
+        except Exception as e:
+            print(f"Status:   {Colors.RED}STOPPED / UNREACHABLE{Colors.END}")
+            print(f"Target:   http://{host}:{port}")
+            print(f"Detail:   {e}\n")
+            return
+
+    print_banner()
+    print(f"{Colors.GREEN}{Colors.BOLD}Starting ZARA Unified Command Center UI...{Colors.END}")
+    print(f"Local Server: {Colors.CYAN}http://{host}:{port}{Colors.END}")
+    print(f"Press Ctrl+C to shutdown.\n")
+
+    if getattr(args, "open", False):
+        try:
+            webbrowser.open(f"http://{host}:{port}")
+        except Exception:
+            pass
+
+    import uvicorn
+    from ui.server import create_ui_app
+    app = create_ui_app()
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
 def main():
     parser = argparse.ArgumentParser(description="ZARA Autonomous Agent CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -768,6 +811,13 @@ def main():
     w_refresh = world_sub.add_parser("refresh", help="Force refresh stale modalities")
     w_refresh.add_argument("project", type=str, nargs="?", default="", help="Optional project name, ID, or path")
 
+    # ui command
+    ui_p = subparsers.add_parser("ui", help="Launch ZARA Unified Command Center & Control UI")
+    ui_p.add_argument("ui_action", nargs="?", default="start", choices=["start", "status"], help="UI action: start (default) or status")
+    ui_p.add_argument("--port", type=int, default=UI_PORT, help="Port to bind UI server (default 8420)")
+    ui_p.add_argument("--host", type=str, default=UI_HOST, help="Host interface to bind (default 127.0.0.1)")
+    ui_p.add_argument("--open", action="store_true", help="Automatically open Command Center UI in web browser")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -795,7 +845,8 @@ def main():
         "autonomous": cmd_autonomous,
         "plan": cmd_plan,
         "decisions": cmd_decisions,
-        "world": cmd_world
+        "world": cmd_world,
+        "ui": cmd_ui
     }
     commands[args.command](args)
 

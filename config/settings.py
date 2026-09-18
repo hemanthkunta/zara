@@ -137,3 +137,11 @@ WORLD_DIR = LOGS_DIR / "world"
 WORLD_DIR.mkdir(parents=True, exist_ok=True)
 WORLD_SNAPSHOTS_DIR = LOGS_DIR / "world_snapshots"
 WORLD_SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Phase 13: Unified Command Center & Control UI
+UI_HOST = os.getenv("ZARA_UI_HOST", "127.0.0.1")
+UI_PORT = int(os.getenv("ZARA_UI_PORT", "8420"))
+UI_DIR = BASE_DIR / "ui"
+UI_STATIC_DIR = UI_DIR / "static"
+UI_STATIC_DIR.mkdir(parents=True, exist_ok=True)
+UI_ENABLE_CORS = False

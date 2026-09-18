@@ -56,6 +56,9 @@ logs/screenshots/
 logs/blender_renders/
 logs/events.jsonl
 logs/notifications.jsonl
+logs/decisions.jsonl
+config/autonomous_config.json
+config/schedules.json
 modules/blender_scripts/
 checkpoints/checkpoint_*.json
 queue/improvement_proposals/prop-*.json
