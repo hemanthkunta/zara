@@ -21,9 +21,10 @@ PROJECTS_DIR = BASE_DIR / "projects"
 SCHEDULES_DIR = BASE_DIR / "schedules"
 SCHEDULES_FILE = CONFIG_DIR / "schedules.json"
 EVENTS_LOG_FILE = LOGS_DIR / "events.jsonl"
+BACKUPS_DIR = BASE_DIR / "backups"
 
 # Ensure runtime directories exist
-for directory in (MEMORY_DIR, JOB_QUEUE_DIR, CONFIG_DIR, LOGS_DIR, CHECKPOINTS_DIR, SCREENSHOTS_DIR, PROJECTS_DIR, SCHEDULES_DIR):
+for directory in (MEMORY_DIR, JOB_QUEUE_DIR, CONFIG_DIR, LOGS_DIR, CHECKPOINTS_DIR, SCREENSHOTS_DIR, PROJECTS_DIR, SCHEDULES_DIR, BACKUPS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 # Risk Levels for Human Confirmation System

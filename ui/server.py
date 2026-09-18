@@ -235,6 +235,7 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
 
         return redact_sensitive_data({
             "status": "ONLINE",
+            "health": eng.health_service.check_all().overall.value if hasattr(eng, "health_service") and eng.health_service else "HEALTHY",
             "uptime_seconds": round(time.time() - app.state.start_time, 1),
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "cpu_percent": metrics["cpu_percent"],
@@ -257,25 +258,72 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
     @app.get("/api/health")
     async def get_health():
         eng: ZaraEngine = app.state.engine
+        if hasattr(eng, "health_service") and eng.health_service:
+            report = eng.health_service.check_all()
+            rep_dict = report.to_dict()
+            c_map = {k.lower().replace(" ", "_"): v for k, v in report.components.items()}
+            c_map.update(report.components)
+            legacy_components = {
+                "engine": "ONLINE" if (c_map.get("core") or c_map.get("engine")) and (c_map.get("core") or c_map.get("engine")).status.value in ("HEALTHY", "READY") else "DEGRADED",
+                "world_model": "ONLINE" if c_map.get("world_model") and c_map["world_model"].status.value in ("HEALTHY", "READY") else "UNAVAILABLE",
+                "planner": "ONLINE" if c_map.get("planner") and c_map["planner"].status.value in ("HEALTHY", "READY") else "READY",
+                "event_bus": "ONLINE" if c_map.get("event_bus") and c_map["event_bus"].status.value in ("HEALTHY", "READY") else "UNAVAILABLE",
+                "workspace": "READY" if c_map.get("workspace") and c_map["workspace"].status.value in ("HEALTHY", "READY") else "UNAVAILABLE",
+                "memory": "ONLINE" if c_map.get("memory") and c_map["memory"].status.value in ("HEALTHY", "READY") else "UNAVAILABLE",
+                "voice": "READY" if c_map.get("voice") and c_map["voice"].status.value in ("HEALTHY", "READY") else "DISABLED",
+                "vision": "READY" if c_map.get("vision") and c_map["vision"].status.value in ("HEALTHY", "READY") else "DISABLED",
+                "browser": "READY" if c_map.get("browser") and c_map["browser"].status.value in ("HEALTHY", "READY") else "READY",
+                "cyber_lab": "READY" if c_map.get("cyber_lab") and c_map["cyber_lab"].status.value in ("HEALTHY", "READY") else "DISABLED",
+                "blender": "READY" if c_map.get("blender") and c_map["blender"].status.value in ("HEALTHY", "READY") else "DISABLED",
+                "scheduler": "ONLINE" if c_map.get("scheduler") and c_map["scheduler"].status.value in ("HEALTHY", "READY") else "UNAVAILABLE",
+                "notifications": "ONLINE" if c_map.get("notifications") and c_map["notifications"].status.value in ("HEALTHY", "READY") else "UNAVAILABLE",
+            }
+            res = {
+                "status": "healthy" if report.overall.value in ("HEALTHY", "READY", "DEGRADED") else report.overall.value.lower(),
+                "overall": report.overall.value,
+                "healthy_count": report.healthy_count,
+                "total_count": report.total_count,
+                "components": legacy_components,
+                "subsystem_details": rep_dict.get("components", {}),
+                "timestamp": report.timestamp,
+            }
+            return redact_sensitive_data(res)
         return {
             "status": "healthy",
-            "components": {
-                "engine": "ONLINE",
-                "world_model": "ONLINE" if hasattr(eng, "world_model") and eng.world_model else "UNAVAILABLE",
-                "planner": "ONLINE" if hasattr(eng, "adaptive_replanner") else "READY",
-                "event_bus": "ONLINE" if hasattr(eng, "event_bus") and eng.event_bus else "UNAVAILABLE",
-                "workspace": "ONLINE" if hasattr(eng, "project_manager") and eng.project_manager else "READY",
-                "memory": "ONLINE" if hasattr(eng, "memory") and eng.memory else "UNAVAILABLE",
-                "voice": "READY" if hasattr(eng, "voice") and eng.voice else "DISABLED",
-                "vision": "READY" if hasattr(eng, "vision") and eng.vision else "DISABLED",
-                "browser": "READY" if hasattr(eng, "research") and eng.research else "READY",
-                "cyber_lab": "READY" if hasattr(eng, "cyber_lab") and eng.cyber_lab else "DISABLED",
-                "blender": "READY" if hasattr(eng, "blender") and eng.blender else "DISABLED",
-                "scheduler": "ONLINE" if hasattr(eng, "scheduler") and eng.scheduler else "UNAVAILABLE",
-                "notifications": "ONLINE" if hasattr(eng, "notifications") and eng.notifications else "UNAVAILABLE",
-            },
+            "overall": "HEALTHY",
+            "healthy_count": 1,
+            "total_count": 1,
+            "components": {"engine": "ONLINE"},
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
+
+    @app.get("/api/doctor")
+    async def get_doctor():
+        eng: ZaraEngine = app.state.engine
+        from core.doctor import EnvironmentDoctor
+        ws = getattr(eng, "workspace_root", None)
+        report = EnvironmentDoctor.run_diagnostics(ws)
+        return redact_sensitive_data(report.to_dict())
+
+    @app.post("/api/system/backup")
+    async def create_system_backup():
+        eng: ZaraEngine = app.state.engine
+        if hasattr(eng, "backup_manager") and eng.backup_manager:
+            path = eng.backup_manager.create_backup()
+            return {"success": True, "backup_path": str(path), "filename": path.name}
+        from core.backup import BackupManager
+        bm = BackupManager()
+        path = bm.create_backup()
+        return {"success": True, "backup_path": str(path), "filename": path.name}
+
+    @app.get("/api/system/backups")
+    async def list_system_backups():
+        eng: ZaraEngine = app.state.engine
+        if hasattr(eng, "backup_manager") and eng.backup_manager:
+            return {"backups": eng.backup_manager.list_backups()}
+        from core.backup import BackupManager
+        bm = BackupManager()
+        return {"backups": bm.list_backups()}
 
     # ──────────────────────────────────────────────────────────────────────────
     # REST API: World Model (Phase 12)

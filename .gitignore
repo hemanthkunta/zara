@@ -63,4 +63,6 @@ modules/blender_scripts/
 checkpoints/checkpoint_*.json
 queue/improvement_proposals/prop-*.json
 queue/job_applications/draft_*.json
+backups/*.tar.gz
+backups/*.tmp*
 

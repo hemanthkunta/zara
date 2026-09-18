@@ -70,7 +70,11 @@ Unlike open-ended prompts that assume success, ZARA operates on a strictly verif
 | **Desktop GUI** | `gui/app.py` | Native dark-themed desktop interface displaying conversation, live state pipeline, memory, and checkpoints. |
 | **Command Center UI** | `ui/server.py`, `ui/static/` | Phase 13 visual command center dashboard with FastAPI backend, WebSockets event streaming, multimodal world model inspector, task DAG, screen perception feed, and subsystem control. |
 | **Observability & Audit** | `core/observability.py` | Structured JSONL audit log (`logs/audit.jsonl`) with automatic secret scrubbing. |
-| **Crash Recovery** | `core/recovery.py` | Checkpoints task context to `checkpoints/` after every verified step, enabling safe resume from last verified step. |
+| **Crash Recovery** | `core/recovery.py` | Checkpoints task context to `checkpoints/` after every verified step, enabling safe resume from last verified step with 5-tier classification (`SAFE_RESUME`, `RETRY`, `REQUIRES_VERIFICATION`, `REQUIRES_APPROVAL`, `MANUAL_INTERVENTION`). |
+| **Unified Health & Lifecycle** | `core/lifecycle.py`, `core/health.py` | Phase 18 Production Lifecycle & Health: 8-stage state-machine startup/shutdown, non-invasive active probes across all 16 subsystems (`GlobalHealthService`). |
+| **Environment Doctor** | `core/doctor.py` | Phase 18 Environment Diagnostics: Deep validation of runtime (Python 3.10+), Git, SQLite, AI provider keys, optional tools (Blender, Nmap), and port availability without leaking secrets. |
+| **Atomic Persistence & Backup**| `core/persistence.py`, `core/backup.py` | Phase 18 Hardening & Disaster Recovery: Fsync atomic writes, corruption quarantine, SHA-256 integrity, compressed `.tar.gz` archives with path traversal protection. |
+| **Configuration Validator** | `config/validator.py` | Phase 18 Configuration Integrity: Type & range bounds enforcement, safe sanitization, and immutable safety blocklist verification. |
 
 ---
 
@@ -217,6 +221,24 @@ Start an interactive chat session with ZARA:
 ./zara.py learning rollback prop-12345678
 ```
 
+### System Health, Doctor & Backups (Phase 18)
+```bash
+# Check aggregate health of all 16 subsystems
+./zara.py health
+./zara.py health --json
+
+# Run deep environment diagnostics and dependency audits
+./zara.py doctor
+./zara.py doctor --json
+
+# Create atomic compressed system backup (.tar.gz)
+./zara.py backup
+./zara.py backup --list
+
+# Safely restore from a verified backup archive
+./zara.py restore backups/zara_backup_20260918_203000.tar.gz
+```
+
 ### Inspect Task Recovery Checkpoints
 ```bash
 ./zara.py recover
@@ -255,13 +277,19 @@ Start an interactive chat session with ZARA:
 ├── README.md                    # Architecture and usage documentation
 ├── config/
 │   ├── settings.py              # Configuration, model settings & risk tiers
+│   ├── validator.py             # Configuration validation & blocklist enforcement (Phase 18)
 │   └── security_scope.json      # Pre-approved security scope list
 ├── core/
 │   ├── engine.py                # 8-stage state machine execution engine
+│   ├── lifecycle.py             # Deterministic startup, states & graceful shutdown (Phase 18)
+│   ├── health.py                # Unified health service across all 16 subsystems (Phase 18)
+│   ├── doctor.py                # Deep environment diagnostics & dependency audits (Phase 18)
+│   ├── backup.py                # Atomic backup (.tar.gz) & verified restore (Phase 18)
+│   ├── persistence.py           # Atomic writes, corruption quarantine & checksums (Phase 18)
 │   ├── conversation.py          # Multi-turn conversational session manager
 │   ├── prompts.py               # Master looping system prompts & templates
 │   ├── state.py                 # State models & dataclasses
-│   ├── recovery.py              # Task checkpointing & crash recovery
+│   ├── recovery.py              # Task checkpointing & classified crash recovery (Phase 18)
 │   └── observability.py         # Structured JSONL audit logger & secret scrubber
 ├── brain/
 │   ├── base.py                  # LLMProvider abstract base class
@@ -309,6 +337,7 @@ Start an interactive chat session with ZARA:
 │   ├── episodes.jsonl           # Structured episodic memory
 │   ├── preferences.json         # User preferences store
 │   └── vectors.db               # SQLite hybrid vector & structured memory index
+├── backups/                     # Compressed .tar.gz system backups (Phase 18)
 ├── queue/
 │   ├── job_applications/        # Human-in-the-loop review queue
 │   ├── improvement_proposals/   # Self-improvement proposals queue
@@ -334,5 +363,8 @@ Start an interactive chat session with ZARA:
     ├── test_model_integration.py # Phase 16 worker routing, engine & UI integration
     ├── test_evaluation_core.py  # Phase 17 evaluation dimensions, criteria & learning candidates
     ├── test_learning_strategies.py # Phase 17 strategy library, planner integration & subsystems
-    └── test_improvement_experiments.py # Phase 17 proposals, safety guards, experiments & rollback
+    ├── test_improvement_experiments.py # Phase 17 proposals, safety guards, experiments & rollback
+    ├── test_final_integration_lifecycle.py # Phase 18 deterministic lifecycle, config & atomic persistence
+    ├── test_final_health_doctor.py # Phase 18 health service, doctor diagnostics, backups & recovery
+    └── test_final_end_to_end_scenarios.py # Phase 18 end-to-end scenarios A-G, hardening & invariants
 ```

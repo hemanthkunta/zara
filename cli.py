@@ -1099,6 +1099,91 @@ def cmd_learning(args):
     finally:
         engine.close()
 
+def cmd_health(args):
+    from core.health import GlobalHealthService
+    service = GlobalHealthService()
+    report = service.check_all()
+
+    if getattr(args, "json", False):
+        print(json.dumps(report.to_dict(), indent=2))
+        return
+
+    print_banner()
+    color = Colors.GREEN if report.overall.value in ("HEALTHY", "READY") else (Colors.YELLOW if report.overall.value == "DEGRADED" else Colors.RED)
+    print(f"\n{Colors.BOLD}=== ZARA GLOBAL SUBSYSTEM HEALTH ==={Colors.END}")
+    print(f"Overall Status: {color}{report.overall.value}{Colors.END} ({report.healthy_count}/{report.total_count} Operational)\n")
+    print(f"{'Subsystem':<16} {'Status':<12} {'Latency':<10} {'Message'}")
+    print("-" * 75)
+
+    for name, sub in report.components.items():
+        st_color = Colors.GREEN if sub.status.value in ("HEALTHY", "READY") else (Colors.YELLOW if sub.status.value == "DEGRADED" else Colors.RED)
+        print(f"{name:<16} {st_color}{sub.status.value:<12}{Colors.END} {sub.latency_ms:>6.1f}ms   {sub.message}")
+    print("-" * 75)
+
+def cmd_doctor(args):
+    from core.doctor import EnvironmentDoctor
+    report = EnvironmentDoctor.run_diagnostics()
+
+    if getattr(args, "json", False):
+        print(json.dumps(report.to_dict(), indent=2))
+        return
+
+    print_banner()
+    print(f"\n{Colors.BOLD}=== ZARA ENVIRONMENT & DEPENDENCY DOCTOR ==={Colors.END}")
+    st_color = Colors.GREEN if report.can_run_core else Colors.RED
+    core_status = "READY FOR OPERATION" if report.can_run_core else "ACTION REQUIRED"
+    print(f"Core Readiness: {st_color}{core_status}{Colors.END}")
+    print(f"Issues: {report.issues_found} | Warnings: {report.warnings_found}\n")
+
+    for c in report.checks:
+        if c.status.value == "AVAILABLE":
+            tag = f"{Colors.GREEN}✔ [{c.category.value}]{Colors.END}"
+        elif c.status.value == "WARNING":
+            tag = f"{Colors.YELLOW}⚠ [{c.category.value}]{Colors.END}"
+        else:
+            tag = f"{Colors.RED}✘ [{c.category.value}]{Colors.END}"
+
+        print(f"{tag} {Colors.BOLD}{c.name}{Colors.END}: {c.message}")
+        if c.remediation:
+            print(f"    {Colors.CYAN}Remediation:{Colors.END} {c.remediation}")
+    print()
+
+def cmd_backup(args):
+    from core.backup import BackupManager
+    bm = BackupManager()
+    out = getattr(args, "output", None)
+    out_path = Path(out) if out else None
+    print(f"{Colors.CYAN}Creating ZARA state backup archive...{Colors.END}")
+    try:
+        archive = bm.create_backup(output_path=out_path)
+        print(f"{Colors.GREEN}✔ Backup successfully created:{Colors.END} {archive}")
+        print(f"Size: {archive.stat().st_size / 1024:.1f} KB")
+    except Exception as e:
+        print(f"{Colors.RED}✘ Backup failed:{Colors.END} {e}")
+
+def cmd_restore(args):
+    from core.backup import BackupManager
+    bm = BackupManager()
+    src = Path(args.backup_file)
+    if not src.exists():
+        print(f"{Colors.RED}Error: Backup file '{src}' does not exist.{Colors.END}")
+        return
+
+    if not getattr(args, "force", False):
+        confirm = input(f"{Colors.YELLOW}Restore state from '{src.name}'? Pre-restore checkpoint will be saved. (y/N): {Colors.END}").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("Restore aborted.")
+            return
+
+    print(f"{Colors.CYAN}Restoring state from {src.name}...{Colors.END}")
+    try:
+        res = bm.restore_backup(src)
+        print(f"{Colors.GREEN}✔ Successfully restored {res['files_restored']} files.{Colors.END}")
+        if res.get("pre_restore_backup"):
+            print(f"  Safety checkpoint saved to: {res['pre_restore_backup']}")
+    except Exception as e:
+        print(f"{Colors.RED}✘ Restore failed:{Colors.END} {e}")
+
 def main():
     parser = argparse.ArgumentParser(description="ZARA Autonomous Agent CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -1325,6 +1410,23 @@ def main():
     l_rollback = learning_sub.add_parser("rollback", help="Rollback an improvement proposal or version")
     l_rollback.add_argument("id", type=str, help="Proposal or Version ID to rollback")
 
+    # health command (Phase 18)
+    health_p = subparsers.add_parser("health", help="Check global health across all 16 ZARA subsystems")
+    health_p.add_argument("--json", action="store_true", help="Output health report in JSON format")
+
+    # doctor command (Phase 18)
+    doctor_p = subparsers.add_parser("doctor", help="Run actionable environment and dependency diagnostics")
+    doctor_p.add_argument("--json", action="store_true", help="Output diagnostics in JSON format")
+
+    # backup command (Phase 18)
+    backup_p = subparsers.add_parser("backup", help="Create a safe, self-contained archive of ZARA state")
+    backup_p.add_argument("--output", type=str, default=None, help="Custom output archive path (.tar.gz)")
+
+    # restore command (Phase 18)
+    restore_p = subparsers.add_parser("restore", help="Restore ZARA state from a backup archive")
+    restore_p.add_argument("backup_file", type=str, help="Path to .tar.gz backup archive")
+    restore_p.add_argument("--force", action="store_true", help="Bypass interactive confirmation prompt")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -1356,7 +1458,11 @@ def main():
         "ui": cmd_ui,
         "workers": cmd_workers,
         "models": cmd_models,
-        "learning": cmd_learning
+        "learning": cmd_learning,
+        "health": cmd_health,
+        "doctor": cmd_doctor,
+        "backup": cmd_backup,
+        "restore": cmd_restore
     }
     commands[args.command](args)
 

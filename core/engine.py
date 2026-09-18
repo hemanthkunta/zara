@@ -93,6 +93,10 @@ from tools.blender_tools import (
     BlenderRenderTool
 )
 from core.recovery import RecoveryManager
+from core.lifecycle import ZaraLifecycleManager
+from core.health import GlobalHealthService
+from core.doctor import EnvironmentDoctor
+from core.backup import BackupManager
 from core.observability import audit_logger
 from modules.events import EventBus, Event, EventType, ConditionWatcher
 from modules.scheduler import (
@@ -218,6 +222,12 @@ class ZaraEngine:
             resource_manager=self.resource_manager,
             event_bus=self.event_bus
         )
+
+        # Phase 18: Unified Lifecycle, Health Diagnostics, Doctor & Backup Management
+        self.lifecycle_manager = ZaraLifecycleManager(self)
+        self.health_service = self.lifecycle_manager.health_service
+        self.doctor_service = EnvironmentDoctor
+        self.backup_manager = BackupManager(base_dir=self.workspace_root)
 
         # Initialize Tool Registry
         self.tools = ToolRegistry()
@@ -1828,7 +1838,12 @@ class ZaraEngine:
             }
 
     def close(self) -> None:
-        """Cleanly close underlying memory store, worker orchestrator, and resources."""
+        """Cleanly close underlying memory store, worker orchestrator, and all resources."""
+        if hasattr(self, "lifecycle_manager") and self.lifecycle_manager:
+            try:
+                self.lifecycle_manager.shutdown()
+            except Exception:
+                pass
         if hasattr(self, "workstream_orchestrator") and self.workstream_orchestrator:
             try:
                 self.workstream_orchestrator.close()
