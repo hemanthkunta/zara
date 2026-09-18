@@ -28,12 +28,17 @@ class ConversationalSession:
 
     def process_user_input(self, user_text: str) -> str:
         """Process conversational user input, maintaining context and dispatching agent tasks."""
+        import re
         self.history.append(ConversationTurn(role="user", content=user_text))
 
-        # Check if the user is asking a question or requesting an engineering task
-        is_direct_query = any(user_text.lower().startswith(q) for q in [
-            "what is", "who are", "how do", "status", "help", "explain", "tell me"
-        ]) and not any(verb in user_text.lower() for verb in ["create", "build", "write", "fix", "run", "test", "patch"])
+        # Check if user input is conversational query vs action request
+        clean = re.sub(r'^(?:hey\s+|hi\s+|hello\s+)?zara[,:\s]*', '', user_text, flags=re.IGNORECASE).strip().lower()
+        has_action_verb = any(v in clean.split() for v in ["create", "build", "write", "fix", "patch", "run", "install", "execute", "scan", "test"])
+        is_direct_query = (
+            user_text.strip().endswith("?")
+            or any(clean.startswith(q) for q in ["what", "who", "where", "when", "why", "how", "status", "help", "explain", "tell me", "can you"])
+            or not has_action_verb
+        )
 
         if is_direct_query:
             # Answer conversationally using LLM brain with session context

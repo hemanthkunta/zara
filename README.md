@@ -1,31 +1,31 @@
-# ZARA: Autonomous Engineering & Research Agent
+# ZARA: Autonomous Personal AI Engineering & Research Agent
 
-> **ZARA** is an autonomous engineering and research agent operating on a strict, verifiable state-machine loop with continuous self-learning, sandboxed execution, safety interceptors, and local female TTS voice feedback.
+> **ZARA** is a production-grade personal AI engineering and research agent operating on an 8-stage state-machine loop with continuous self-learning, sandboxed process execution, provider-independent LLM brain architecture, typed tool registry, macOS developer tools, and local female TTS voice feedback.
 
 ---
 
-## The Core State Machine Loop
+## 1. Architecture & The Core Loop
 
-Unlike open-ended prompts that assume success, ZARA operates on an 8-stage cycle where progress is strictly verified by real signals (tests, exit codes, output matching) before advancing:
+Unlike open-ended prompts that assume success, ZARA operates on a strictly verified 8-stage state machine where each step must satisfy checkable criteria before proceeding:
 
 ```
 ┌─────────────┐
-│  PERCEIVE   │  Read task, current repo state, query memory log for past lessons
+│  PERCEIVE   │  Read task, inspect workspace, query persistent memory log
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│    PLAN     │  Break into smallest verifiable steps; state success condition per step
+│    PLAN     │  Decompose into smallest verifiable steps with explicit success conditions
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│     ACT     │  Execute ONE step (write code / run command / call tool)
+│     ACT     │  Execute ONE step via typed tools (code, terminal, test, etc.)
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│   VERIFY    │  Run real check (pytest, lint, exit code); compare actual vs expected
+│   VERIFY    │  Validate real signals (tests pass, exit code 0, AST syntax checks)
 └──────┬──────┘
        ▼
-   pass? ──no──► DIAGNOSE & RETRY (root cause hypothesis → targeted fix; max 5 retries)
+   pass? ──no──► DIAGNOSE & RETRY (traceback parser -> hypothesis -> targeted patch, max 5)
        │yes
        ▼
 ┌─────────────┐
@@ -33,68 +33,169 @@ Unlike open-ended prompts that assume success, ZARA operates on an 8-stage cycle
 └──────┬──────┘
        ▼
 ┌─────────────┐
-│   PERSIST   │  Append to memory/zara_log.md (versioned self-learning store)
+│   PERSIST   │  Append to memory/zara_log.md & episodic memory store
 └──────┬──────┘
        ▼
    more steps? ──yes──► back to ACT
        │no
        ▼
 ┌─────────────┐
-│   REPORT    │  Report verified summary & audio status update via female TTS
+│   REPORT    │  Report verified summary & auditory update via female TTS (Samantha)
 └─────────────┘
 ```
 
 ---
 
-## Architectural Modules
+## 2. Implemented Subsystems (Phases 0–24)
 
-| Module | Location | Purpose & Autonomy |
+| Subsystem | Components | Description |
 |---|---|---|
-| **Core Engine** | `core/engine.py` | 8-stage state machine orchestrating Perceive &rarr; Plan &rarr; Act &rarr; Verify &rarr; Diagnose &rarr; Reflect &rarr; Persist. |
-| **Master Prompts** | `core/prompts.py` | The master looping system prompt, stage templates, and operational guardrails. |
-| **Coding** | `modules/coding.py` | Workspace-constrained file reader, writer, AST syntax validator, and targeted patcher. |
-| **Debugging** | `modules/debugging.py` | Error parsing, traceback diagnosis, hypothesis formation, and targeted fix proposal. |
-| **Execution** | `modules/execution.py` | Safe process execution engine with destructive command safety filters and Docker isolation. |
-| **Self-Learning Memory** | `modules/memory.py` | Append-only store (`memory/zara_log.md`) with keyword relevance querying before planning. |
-| **Voice Interface** | `modules/voice.py` | Offline macOS native female voice (`Samantha`) + fallback to ElevenLabs / pyttsx3. |
-| **Security Testing** | `modules/security.py` | Scope-gated security testing strictly enforcing `config/security_scope.json` with user confirmation. |
-| **Job Hunter** | `modules/job_hunter.py` | Job application drafter outputting to `queue/job_applications/` for manual human review (never auto-submits). |
-| **Orchestrator** | `modules/orchestrator.py` | Multi-task queue manager tracking `pending`, `running`, `done`, and `blocked` tasks. |
+| **AI Brain Layer** | `brain/` | Provider-independent architecture (`LLMProvider`) supporting **Google Gemini**, **Anthropic Claude**, **OpenAI GPT**, **Local Ollama**, and an offline **Mock** provider with automatic failover and token tracking. |
+| **Typed Tool Registry** | `tools/` | Schema-validated tool interface with risk levels (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`), input validation, timeouts, and JSONL audit logging. |
+| **Autonomous Coding** | `modules/coding.py` | Multi-file reader/writer, AST syntax validation, unified diff generator, and symbol extraction. |
+| **Intelligent Debugger** | `modules/debugging.py` | Traceback parser (file, line, exception type), test reproducer generator, hypothesis builder, and targeted patcher. |
+| **Verifiable Evidence** | `modules/verification.py` | Evidence collector storing SHA-256 output hashes, exit codes, and timestamps for every check. |
+| **Layered Sandbox** | `modules/execution.py` | `Request -> Policy -> Permission -> Sandbox -> Execution -> Audit`. Regex interceptor for destructive commands, Docker container isolation (`--network none`), memory/CPU limits. |
+| **Hierarchical Memory** | `modules/memory.py` | Short-term context, episodic store (`memory/episodes.jsonl`), user preferences (`memory/preferences.json`), and append-only lessons (`memory/zara_log.md`). |
+| **Self-Improvement** | `modules/self_improvement.py` | Evaluates completed tasks and proposes prompt, workflow, or tool refinements to human review queue. |
+| **Voice Interface** | `modules/voice.py` | Zero-dependency native macOS female TTS (`say -v Samantha`) with speech interruption, sanitization, and STT microphone adapter. |
+| **Conversational Mode** | `core/conversation.py` | Multi-turn conversational REPL (`./zara.py chat`) retaining task context across prompts. |
+| **macOS Automation** | `tools/macos_control.py` | Native desktop notifications (`osascript`), clipboard read/write (`pbcopy`/`pbpaste`), screenshot capture (`screencapture`). |
+| **Vision Analysis** | `modules/vision.py` | Image and screenshot analysis for terminal errors, UI interfaces, and visual assets. |
+| **Web Research** | `modules/research.py` | Query &rarr; Search &rarr; Retrieve &rarr; Extract &rarr; Synthesize &rarr; Cite with verified facts and source separation. |
+| **Controlled Git** | `modules/git_tools.py` | Status, diff, branch, commit, log, and pull request bundle preparation. |
+| **Blender 3D** | `modules/blender.py` | Standalone Python script generator for 3D meshes, materials, lighting, cameras, and headless rendering. |
+| **Authorized Security Lab** | `modules/security.py` | Scope-gated defensive port scanner and HTTP security header auditor enforcing `config/security_scope.json`. |
+| **Job Application Drafter**| `modules/job_hunter.py` | Tailored application packet and cover letter drafter outputting to `queue/job_applications/` with `pending_human_approval`. |
+| **Desktop GUI** | `gui/app.py` | Native dark-themed desktop interface displaying conversation, live state pipeline, memory, and checkpoints. |
+| **Observability & Audit** | `core/observability.py` | Structured JSONL audit log (`logs/audit.jsonl`) with automatic secret scrubbing. |
+| **Crash Recovery** | `core/recovery.py` | Checkpoints task context to `checkpoints/` after every verified step, enabling safe resume from last verified step. |
 
 ---
 
-## Hard Rules & Safety Guardrails
+## 3. Quickstart & CLI Commands
 
-- **Zero Unverified Approvals**: Never mark a step "done" because code "looks right". A step only passes when verified by concrete output or exit code 0.
-- **Destructive Command Interception**: Blocks commands matching patterns like `rm -rf /`, `DROP TABLE`, `git push --force`, or fork bombs.
-- **Security Scope Enforcement**: Security scans can only target hosts listed in `config/security_scope.json` (`localhost`, `127.0.0.1`). Unauthorized targets trigger immediate exceptions.
-- **Human-in-the-Loop Job Applications**: To comply with platform Terms of Service, job applications are drafted into `queue/job_applications/` and require explicit human review.
-- **Bounded Diagnostic Retries**: Max 5 attempts per step before gracefully halting and escalating to human guidance.
+### Conversational Mode (Default)
+Start an interactive chat session with ZARA:
+```bash
+./zara.py chat
+# or simply:
+./zara.py
+```
 
----
+### Run an Autonomous Engineering Task
+```bash
+./zara.py run "Create a FastAPI application with tests" --tag api
+```
 
-## Quickstart
+### Launch the Desktop GUI
+```bash
+./zara.py gui
+```
 
-### 1. Test Voice Synthesis
+### List Registered Tools and Risk Levels
+```bash
+./zara.py tools
+```
+
+### Inspect or Search Self-Learning Memory Log
+```bash
+# Read all entries
+./zara.py memory
+
+# Search memory for lessons on a specific topic
+./zara.py memory "unit test verification"
+```
+
+### Inspect Task Recovery Checkpoints
+```bash
+./zara.py recover
+```
+
+### Test Voice Synthesis (Female Voice)
 ```bash
 ./zara.py voice-test
 ```
 
-### 2. Search or Read Memory Log
+### Run Comprehensive Test Suite
 ```bash
-# Read all memory entries
-./zara.py memory
-
-# Search memory for past lessons on a topic
-./zara.py memory "unit test verification"
+./zara.py test
 ```
 
-### 3. Run an Autonomous Task
-```bash
-./zara.py run "echo 'ZARA autonomous loop active' > status.txt" --tag test
-```
+---
 
-### 4. Run Core Verification Tests
-```bash
-pytest -v tests/
+## 4. Safety Guardrails & Policies
+
+- **Strict Scope Verification**: Security auditing is restricted to pre-approved hosts in `config/security_scope.json` (`localhost`, `127.0.0.1`). Any external target triggers a `ScopeViolationError`.
+- **Destructive Command Interception**: Commands containing `rm -rf /`, `DROP TABLE`, `git push --force`, or fork bombs are blocked by the safety interceptor.
+- **Draft-Only Job Hunter**: Job applications are enqueued to `queue/job_applications/` for manual human approval. Automated submission is prohibited.
+- **Secret Scrubbing**: API keys, auth tokens, and passwords are automatically redacted from logs and memory entries.
+- **Bounded Retries**: Maximum 5 diagnostic attempts per step before escalating to human input.
+
+---
+
+## 5. Directory Structure
+
+```text
+/Users/hemanthkunta/jarvis/
+├── zara.py                      # Main executable launcher
+├── cli.py                       # CLI parser & command dispatcher
+├── README.md                    # Architecture and usage documentation
+├── config/
+│   ├── settings.py              # Configuration, model settings & risk tiers
+│   └── security_scope.json      # Pre-approved security scope list
+├── core/
+│   ├── engine.py                # 8-stage state machine execution engine
+│   ├── conversation.py          # Multi-turn conversational session manager
+│   ├── prompts.py               # Master looping system prompts & templates
+│   ├── state.py                 # State models & dataclasses
+│   ├── recovery.py              # Task checkpointing & crash recovery
+│   └── observability.py         # Structured JSONL audit logger & secret scrubber
+├── brain/
+│   ├── base.py                  # LLMProvider abstract base class
+│   ├── router.py                # Provider router, fallback chain & structured JSON
+│   └── providers/
+│       ├── gemini.py            # Google Gemini adapter
+│       ├── adapters.py          # Anthropic, OpenAI, and Ollama adapters
+│       └── mock.py              # Deterministic offline provider for tests
+├── tools/
+│   ├── base.py                  # BaseTool and ToolResult abstractions
+│   ├── registry.py              # Tool registry with permission gates
+│   ├── filesystem.py            # Read, write, patch, list tools (with path traversal guards)
+│   ├── terminal.py              # Sandboxed command and test runner tools
+│   └── macos_control.py         # macOS notifications, clipboard, screenshots
+├── modules/
+│   ├── coding.py                # AST analysis, diff calculation & file operations
+│   ├── debugging.py             # Traceback parsing, hypothesis builder & patcher
+│   ├── execution.py             # Layered process runner (Request->Policy->Sandbox->Exec)
+│   ├── verification.py          # Evidence recorder & syntax/command verifier
+│   ├── memory.py                # Multi-tier memory store (lessons, episodes, preferences)
+│   ├── self_improvement.py      # Improvement proposal generator
+│   ├── voice.py                 # Female TTS voice synthesizer & STT adapter
+│   ├── vision.py                # Image & screenshot inspector
+│   ├── research.py              # Web search, retrieval & citation synthesizer
+│   ├── git_tools.py             # Controlled Git & PR preparation
+│   ├── blender.py               # Blender 3D automation script synthesis
+│   ├── security.py              # Authorized cybersecurity lab (port & header audit)
+│   ├── job_hunter.py            # Job application drafter & review queue
+│   └── orchestrator.py          # Multi-task queue state manager
+├── gui/
+│   └── app.py                   # Desktop GUI with state machine visualization
+├── memory/
+│   ├── zara_log.md              # Human-readable append-only lessons
+│   ├── episodes.jsonl           # Structured episodic memory
+│   └── preferences.json         # User preferences store
+├── queue/
+│   ├── job_applications/        # Human-in-the-loop review queue
+│   ├── improvement_proposals/   # Self-improvement proposals queue
+│   └── task_queue.json          # Multi-task orchestrator status store
+├── logs/
+│   ├── audit.jsonl              # Structured audit log
+│   └── zara.log                 # System log
+├── checkpoints/                 # Task recovery state checkpoints
+└── tests/
+    ├── test_zara_core.py        # Core loop and integration tests
+    ├── test_llm_brain.py        # Brain providers and router tests
+    ├── test_tool_registry.py    # Tool validation, traversal & permission tests
+    └── test_specialized_modules.py # Git, Blender, Research, Recovery, Security tests
 ```
