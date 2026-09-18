@@ -170,6 +170,10 @@ class CyberLabScope:
         }
         self.targets_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def list_targets(self) -> List[CyberLabTarget]:
+        """Return all registered targets in scope."""
+        return list(self.targets.values())
+
     def register_target(
         self,
         name: str,

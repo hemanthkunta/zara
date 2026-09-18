@@ -664,6 +664,9 @@ class ProjectManager:
         self.tasks_file = self.zara_dir / "tasks.json"
         self.artifacts_file = self.zara_dir / "artifacts.json"
         self.journal_file = self.zara_dir / "journal.jsonl"
+        self.planning_file = self.zara_dir / "planning.json"
+        self.decisions_file = self.zara_dir / "decisions.jsonl"
+        self.summaries_file = self.zara_dir / "summaries.json"
 
         # Ensure directory structure
         for d in (self.zara_dir, self.checkpoints_dir, self.snapshots_dir):
@@ -904,6 +907,96 @@ class ProjectManager:
             "updated_at": self.project.updated_at
         }
         _atomic_write_json(self.state_file, state_data)
+
+    def save_planning_state(
+        self,
+        goal: Optional[Dict[str, Any]] = None,
+        current_plan: Optional[Dict[str, Any]] = None,
+        plan_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """Persist structured goal and versioned plans to .zara/planning.json."""
+        data = {
+            "version": "1.0",
+            "project_id": self.project.project_id if self.project else None,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "goal": goal,
+            "current_plan": current_plan,
+            "plan_history": plan_history or [],
+        }
+        _atomic_write_json(self.planning_file, data)
+
+    def load_planning_state(self) -> Dict[str, Any]:
+        """Load planning and goal state from .zara/planning.json."""
+        if not self.planning_file.exists():
+            return {}
+        try:
+            return json.loads(self.planning_file.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def record_decision(
+        self,
+        question: str,
+        options: List[str],
+        selected_option: str,
+        rationale_summary: str,
+        task_id: Optional[str] = None,
+        evidence: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Atomically append a structured decision record to .zara/decisions.jsonl."""
+        proj_id = self.project.project_id if self.project else "unknown"
+        record = {
+            "decision_id": f"dec-{uuid.uuid4().hex[:8]}",
+            "project_id": proj_id,
+            "task_id": task_id,
+            "question": question,
+            "options": options,
+            "selected_option": selected_option,
+            "rationale_summary": rationale_summary,
+            "evidence": evidence,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        try:
+            self.decisions_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.decisions_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception:
+            pass
+        return record
+
+    def list_decisions(self) -> List[Dict[str, Any]]:
+        """Read all recorded decisions from .zara/decisions.jsonl."""
+        if not self.decisions_file.exists():
+            return []
+        records = []
+        try:
+            with open(self.decisions_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            records.append(json.loads(line))
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+        return records
+
+    def save_compact_summary(self, summary_data: Dict[str, Any]) -> None:
+        """Persist or append a deterministic context summary."""
+        summaries = self.list_compact_summaries()
+        summaries.append(summary_data)
+        _atomic_write_json(self.summaries_file, summaries)
+
+    def list_compact_summaries(self) -> List[Dict[str, Any]]:
+        """Read all saved compact summaries."""
+        if not self.summaries_file.exists():
+            return []
+        try:
+            data = json.loads(self.summaries_file.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
 
     # -------------------------------------------------------------
     # Task Management & DAG Integration
@@ -1266,6 +1359,12 @@ class ProjectManager:
         self.save_manifest()
         self.journal.append("APPROVAL_DENIED", payload={"ticket_id": ticket_id, "reason": reason})
         return True
+
+    def resolve_approval(self, ticket_id: Optional[str] = None, approved: bool = True, reason: str = "User rejected") -> bool:
+        """Resolve a pending approval ticket with either grant or deny."""
+        if approved:
+            return self.grant_approval(ticket_id)
+        return self.deny_approval(ticket_id, reason=reason)
 
     # -------------------------------------------------------------
     # Snapshots & Version Awareness

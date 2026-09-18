@@ -113,6 +113,19 @@ from modules.autonomous import (
     DailyQueueSynthesizer,
     ProactiveMaintenance
 )
+from modules.goals import Goal, GoalDomain, GoalParser, AmbiguityLevel
+from modules.planning import (
+    HierarchicalPlanner,
+    PlanValidator,
+    PlanValidationResult,
+    PlanCost,
+    DecisionRecord,
+    DecisionRegistry,
+    PlanPreview
+)
+from modules.replanning import AdaptiveReplanner, PlanVersion, PlanningFailureType
+from modules.context import ContextManager, ContextCompactor, CompactSummary
+from modules.workspace import PersistentTask
 
 class ZaraEngine:
     def __init__(
@@ -177,9 +190,23 @@ class ZaraEngine:
         self.daily_queue = DailyQueueSynthesizer(scheduler=self.scheduler, project_manager=self.project_manager)
         self.maintenance = ProactiveMaintenance(project_manager=self.project_manager, event_bus=self.event_bus)
 
+        # Phase 11: Goal Understanding, Planning, Decisions & Context
+        self.decision_registry = DecisionRegistry()
+        self.context_manager = ContextManager(project_id="default")
+        self.adaptive_replanner = AdaptiveReplanner(project_id="default")
+
         # Initialize Tool Registry
         self.tools = ToolRegistry()
         self._register_default_tools()
+        self._register_phase11_event_handlers()
+
+    def _register_phase11_event_handlers(self) -> None:
+        """Register event listeners for autonomous adaptive replanning."""
+        if hasattr(self, "event_bus") and self.event_bus:
+            def on_task_failed(event: Event) -> None:
+                # Log or notify failure event
+                pass
+            self.event_bus.subscribe(EventType.TASK_FAILED, on_task_failed)
 
     @property
     def voice_controller(self):
@@ -290,10 +317,154 @@ class ZaraEngine:
     def set_project_manager(self, pm) -> None:
         """Set persistent project manager for workspace-bound operations."""
         self.project_manager = pm
+        proj_id = pm.project.project_id if pm and getattr(pm, "project", None) else "default"
+        self.context_manager = ContextManager(project_id=proj_id)
+        self.adaptive_replanner = AdaptiveReplanner(project_id=proj_id)
         if hasattr(self, "daily_queue"):
             self.daily_queue.project_manager = pm
         if hasattr(self, "maintenance"):
             self.maintenance.project_manager = pm
+
+    # -------------------------------------------------------------
+    # Phase 11: Goal Understanding, Planning & Adaptive Replanning
+    # -------------------------------------------------------------
+    def understand_goal(self, raw_request: str, project_id: Optional[str] = None) -> Goal:
+        """Transform unstructured user request into structured Goal model."""
+        return GoalParser.parse_goal(raw_request, project_id=project_id)
+
+    def plan_goal(
+        self,
+        goal: Goal,
+        project_id: Optional[str] = None,
+        custom_tasks: Optional[List[PersistentTask]] = None
+    ) -> Tuple[List[PersistentTask], PlanValidationResult, PlanCost]:
+        """Generate hierarchical plan, validate quality and safety, estimate cost, and persist."""
+        proj_id = project_id or (self.project_manager.project.project_id if self.project_manager and self.project_manager.project else "proj-default")
+        tasks = custom_tasks if custom_tasks is not None else HierarchicalPlanner.create_hierarchical_plan(goal, proj_id)
+        budget = self.project_manager.project.budget if self.project_manager and self.project_manager.project else None
+
+        # Scope validation for cybersecurity
+        allowed_scopes = None
+        if hasattr(self, "cyber_lab") and self.cyber_lab:
+            allowed_scopes = [t.host for t in self.cyber_lab.scope.list_targets()] + [t.target_id for t in self.cyber_lab.scope.list_targets()]
+
+        validation = PlanValidator.validate(
+            goal=goal,
+            tasks=tasks,
+            budget=budget,
+            allowed_scopes=allowed_scopes
+        )
+        cost = HierarchicalPlanner.estimate_cost(goal, tasks)
+
+        # Initialize plan version
+        self.adaptive_replanner.initialize_plan(goal, tasks, budget)
+
+        # Persist to workspace if project manager active
+        if self.project_manager:
+            current_v = self.adaptive_replanner.get_current_version()
+            self.project_manager.save_planning_state(
+                goal=goal.to_dict(),
+                current_plan=current_v.to_dict() if current_v else None,
+                plan_history=[v.to_dict() for v in self.adaptive_replanner.history]
+            )
+
+        return tasks, validation, cost
+
+    def preview_plan(
+        self,
+        goal: Goal,
+        tasks: List[PersistentTask],
+        cost: PlanCost,
+        validation: PlanValidationResult
+    ) -> str:
+        """Render concise human-readable preview of plan."""
+        return PlanPreview.render(goal, tasks, cost, validation)
+
+    def record_decision(
+        self,
+        question: str,
+        options: List[str],
+        selected_option: str,
+        rationale_summary: str,
+        task_id: Optional[str] = None,
+        evidence: Optional[str] = None
+    ) -> DecisionRecord:
+        """Log concise operational decision record."""
+        proj_id = self.project_manager.project.project_id if self.project_manager and self.project_manager.project else "default"
+        rec = self.decision_registry.record(
+            project_id=proj_id,
+            question=question,
+            options=options,
+            selected_option=selected_option,
+            rationale_summary=rationale_summary,
+            task_id=task_id,
+            evidence=evidence
+        )
+        if self.project_manager:
+            self.project_manager.record_decision(
+                question=question,
+                options=options,
+                selected_option=selected_option,
+                rationale_summary=rationale_summary,
+                task_id=task_id,
+                evidence=evidence
+            )
+        return rec
+
+    def replan_failed_task(
+        self,
+        goal: Goal,
+        failed_task: PersistentTask,
+        diagnosis: Optional[Diagnosis] = None
+    ) -> Tuple[Optional[PlanVersion], str]:
+        """Perform adaptive replanning after a task failure."""
+        budget = self.project_manager.project.budget if self.project_manager and self.project_manager.project else None
+        new_version, message = self.adaptive_replanner.replan(
+            goal=goal,
+            failed_task=failed_task,
+            diagnosis=diagnosis,
+            budget=budget
+        )
+        if new_version:
+            # Record decision about replanning
+            self.record_decision(
+                question=f"Task '{failed_task.title}' failed ({failed_task.error or 'error'}). How to proceed?",
+                options=["Abort", "Retry blindly", "Adaptive replan with remediation"],
+                selected_option="Adaptive replan with remediation",
+                rationale_summary=new_version.reason_for_change,
+                task_id=failed_task.id
+            )
+            if self.project_manager:
+                self.project_manager.save_planning_state(
+                    goal=goal.to_dict(),
+                    current_plan=new_version.to_dict(),
+                    plan_history=[v.to_dict() for v in self.adaptive_replanner.history]
+                )
+        return new_version, message
+
+    def compact_context(
+        self,
+        goal: Optional[Goal] = None,
+        task_context: Optional[TaskContext] = None
+    ) -> CompactSummary:
+        """Deterministically compact task history and state into compact summary."""
+        proj_id = self.project_manager.project.project_id if self.project_manager and self.project_manager.project else "default"
+        tasks = self.project_manager.dag.list_tasks() if self.project_manager and self.project_manager.dag else []
+        artifacts = self.project_manager.artifacts.list_artifacts() if self.project_manager and self.project_manager.artifacts else []
+        decisions = self.decision_registry.list_by_project(proj_id)
+
+        summary = ContextCompactor.compact(
+            project_id=proj_id,
+            goal=goal,
+            tasks=tasks,
+            artifacts=artifacts,
+            decisions=decisions,
+            task_context=task_context
+        )
+        self.context_manager.add_summary(summary)
+        if self.project_manager:
+            self.project_manager.save_compact_summary(summary.to_dict())
+        return summary
 
     def set_clock(self, clock: Clock) -> None:
         """Inject mock or custom clock across engine and subsystems."""
@@ -1370,6 +1541,21 @@ class ZaraEngine:
 
             task_str = job.action_payload.get("task") or job.name
             custom_steps = job.action_payload.get("steps")
+
+            # Phase 11 Proactive Planning Pipeline:
+            # SCHEDULE -> GOAL UNDERSTANDING -> PLAN VALIDATION -> BUDGET CHECK -> SAFETY CHECK -> EXECUTION
+            goal = self.understand_goal(task_str)
+            if goal.ambiguity_level in (AmbiguityLevel.HIGH, AmbiguityLevel.CRITICAL) and not custom_steps:
+                self.scheduler.mark_job_failed(job.job_id, error=f"AmbiguousGoal: {goal.clarification_question or 'High ambiguity'}")
+                self.notifications.notify(
+                    title="Scheduled Job Ambiguous",
+                    message=f"Job '{job.name}' requires clarification: {goal.clarification_question}",
+                    severity=NotificationSeverity.WARNING,
+                    is_quiet_hours=is_quiet
+                )
+                executed_jobs.append({"job_id": job.job_id, "status": "FAILED", "reason": "AmbiguousGoal"})
+                continue
+
             start_t = time.time()
             result = self.execute_task(task_str, steps=custom_steps)
             duration = time.time() - start_t

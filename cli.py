@@ -395,6 +395,155 @@ def cmd_autonomous(args):
         mgr.disable()
         print(f"{Colors.YELLOW}✔ Autonomous Mode DISABLED.{Colors.END}")
 
+def cmd_plan(args):
+    from modules.workspace import ProjectManager, discover_projects, PersistentTask
+    from config.settings import PROJECTS_DIR
+    from modules.planning import PlanValidator
+    from modules.goals import Goal
+
+    action = getattr(args, "plan_action", None) or "status"
+    target = getattr(args, "project", None) or getattr(args, "target", None)
+
+    def _resolve_project(target: Optional[str]) -> Optional[ProjectManager]:
+        if not target:
+            if (Path.cwd() / ".zara" / "project.json").exists():
+                return ProjectManager.load(Path.cwd())
+            return None
+        target_path = Path(target).resolve()
+        if (target_path / ".zara" / "project.json").exists():
+            return ProjectManager.load(target_path)
+        cand = PROJECTS_DIR / target
+        if (cand / ".zara" / "project.json").exists():
+            return ProjectManager.load(cand)
+        for p in discover_projects():
+            if p.get("id") == target or p.get("name") == target:
+                return ProjectManager.load(Path(p["path"]))
+        return None
+
+    mgr = _resolve_project(target)
+    if not mgr:
+        print(f"{Colors.RED}Project not found or no target workspace specified.{Colors.END}")
+        return
+
+    planning_state = mgr.load_planning_state()
+    goal_data = planning_state.get("goal")
+    current_plan = planning_state.get("current_plan")
+    history = planning_state.get("plan_history", [])
+
+    if action in ("status", None):
+        print(f"\n{Colors.BOLD}=== ZARA PLAN STATUS ==={Colors.END}")
+        print(f"Project: {mgr.project.name} [{mgr.project.project_id}]")
+        if goal_data:
+            print(f"Goal: {goal_data.get('normalized_goal')}")
+            print(f"Domain: {goal_data.get('domain')} | Ambiguity: {goal_data.get('ambiguity_level')}")
+            print(f"Desired Outcome: {goal_data.get('desired_outcome')}")
+        else:
+            print("No structured goal registered.")
+        if current_plan:
+            print(f"\nActive Plan Version: {current_plan.get('version')} ({current_plan.get('plan_id')})")
+            print(f"Reason: {current_plan.get('reason_for_change')}")
+            print("Tasks:")
+            for idx, t in enumerate(current_plan.get("tasks", []), start=1):
+                print(f"  {idx}. [{t.get('capability', 'general').upper()}] {t.get('title')} ({t.get('status')})")
+        else:
+            print("No active plan registered.")
+        print()
+
+    elif action == "history":
+        print(f"\n{Colors.BOLD}=== ZARA PLAN HISTORY ==={Colors.END}")
+        print(f"Project: {mgr.project.name} [{mgr.project.project_id}]")
+        if not history:
+            print("No plan revision history found.")
+        else:
+            for p in history:
+                parent = f" -> parent: {p.get('parent_plan_id')}" if p.get('parent_plan_id') else ""
+                print(f"  • Plan v{p.get('version')} [{p.get('plan_id')}]{parent}")
+                print(f"    Reason: {p.get('reason_for_change')}")
+                print(f"    Tasks: {len(p.get('tasks', []))} | Created: {p.get('created_at')}")
+        print()
+
+    elif action == "validate":
+        print(f"\n{Colors.BOLD}=== ZARA PLAN VALIDATION ==={Colors.END}")
+        if not current_plan or not goal_data:
+            print(f"{Colors.YELLOW}No plan or goal registered to validate.{Colors.END}")
+            return
+        goal = Goal.from_dict(goal_data)
+        tasks = [PersistentTask.from_dict(t) for t in current_plan.get("tasks", [])]
+        validation = PlanValidator.validate(goal=goal, tasks=tasks, budget=mgr.project.budget)
+        if validation.valid:
+            print(f"{Colors.GREEN}✔ Plan is VALID{Colors.END}")
+        else:
+            print(f"{Colors.RED}✘ Plan is INVALID{Colors.END}")
+            for err in validation.errors:
+                print(f"  ! {err}")
+        if validation.warnings:
+            print("Warnings:")
+            for w in validation.warnings:
+                print(f"  * {w}")
+        if validation.required_approvals:
+            print("Required Approvals:")
+            for a in validation.required_approvals:
+                print(f"  [APPROVAL] {a}")
+        print()
+
+    elif action == "approve":
+        print(f"\n{Colors.BOLD}=== ZARA PLAN APPROVAL ==={Colors.END}")
+        if mgr.pending_approval_ticket:
+            ticket_id = mgr.pending_approval_ticket.get("ticket_id")
+            mgr.resolve_approval(ticket_id=ticket_id, approved=True)
+            print(f"{Colors.GREEN}✔ Pending plan/ticket approved successfully.{Colors.END}")
+        else:
+            print(f"{Colors.YELLOW}No pending approval tickets for this project.{Colors.END}")
+        print()
+
+def cmd_decisions(args):
+    from modules.workspace import ProjectManager, discover_projects
+    from config.settings import PROJECTS_DIR, DECISIONS_LOG_FILE
+    from modules.planning import DecisionRegistry, DecisionRecord
+
+    target = getattr(args, "project", None)
+    registry = DecisionRegistry(DECISIONS_LOG_FILE)
+
+    if target:
+        def _resolve_project(target: Optional[str]) -> Optional[ProjectManager]:
+            if not target:
+                if (Path.cwd() / ".zara" / "project.json").exists():
+                    return ProjectManager.load(Path.cwd())
+                return None
+            target_path = Path(target).resolve()
+            if (target_path / ".zara" / "project.json").exists():
+                return ProjectManager.load(target_path)
+            cand = PROJECTS_DIR / target
+            if (cand / ".zara" / "project.json").exists():
+                return ProjectManager.load(cand)
+            for p in discover_projects():
+                if p.get("id") == target or p.get("name") == target:
+                    return ProjectManager.load(Path(p["path"]))
+            return None
+
+        mgr = _resolve_project(target)
+        if mgr:
+            proj_id = mgr.project.project_id
+            decisions = [d for d in registry.decisions if d.project_id == proj_id] or [
+                DecisionRecord.from_dict(d) for d in mgr.list_decisions()
+            ]
+        else:
+            decisions = [d for d in registry.decisions if d.project_id == target]
+    else:
+        decisions = registry.decisions
+
+    print(f"\n{Colors.BOLD}=== ZARA OPERATIONAL DECISION RECORDS ==={Colors.END}")
+    if not decisions:
+        print("No decision records found.")
+    else:
+        for d in decisions:
+            print(f"  • [{d.timestamp[:19]}] {Colors.CYAN}{d.question}{Colors.END}")
+            print(f"    Selected: {Colors.GREEN}{d.selected_option}{Colors.END}")
+            print(f"    Rationale: {d.rationale_summary}")
+            if d.evidence:
+                print(f"    Evidence: {d.evidence}")
+    print()
+
 def cmd_test(args):
     print(f"{Colors.CYAN}Running ZARA test suite...{Colors.END}")
     subprocess.run(["python3", "-m", "unittest", "discover", "tests", "-v"])
@@ -510,6 +659,22 @@ def main():
     auto_sub.add_parser("on", help="Enable autonomous mode")
     auto_sub.add_parser("off", help="Disable autonomous mode")
 
+    # plan command
+    plan_p = subparsers.add_parser("plan", help="Inspect, validate, and manage hierarchical project plans")
+    plan_sub = plan_p.add_subparsers(dest="plan_action", help="Plan operations")
+    p_status = plan_sub.add_parser("status", help="Show plan status and goal understanding")
+    p_status.add_argument("project", type=str, nargs="?", default="", help="Project name, ID, or path")
+    p_history = plan_sub.add_parser("history", help="Show plan revision history")
+    p_history.add_argument("project", type=str, nargs="?", default="", help="Project name, ID, or path")
+    p_validate = plan_sub.add_parser("validate", help="Validate plan quality and safety")
+    p_validate.add_argument("project", type=str, nargs="?", default="", help="Project name, ID, or path")
+    p_approve = plan_sub.add_parser("approve", help="Approve plan or pending ticket")
+    p_approve.add_argument("project", type=str, nargs="?", default="", help="Project name, ID, or path")
+
+    # decisions command
+    dec_p = subparsers.add_parser("decisions", help="View persistent operational decision records")
+    dec_p.add_argument("project", type=str, nargs="?", default="", help="Optional project name, ID, or path")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -534,7 +699,9 @@ def main():
         "schedule": cmd_schedule,
         "jobs": cmd_schedule,
         "queue": cmd_queue,
-        "autonomous": cmd_autonomous
+        "autonomous": cmd_autonomous,
+        "plan": cmd_plan,
+        "decisions": cmd_decisions
     }
     commands[args.command](args)
 
