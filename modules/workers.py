@@ -386,6 +386,19 @@ class WorkstreamOrchestrator:
 
         return True, None
 
+    def get_model_for_worker(self, worker: Worker):
+        """Route and return appropriate ModelSelection for this worker from the engine's model router."""
+        if hasattr(self.engine, "model_router") and self.engine.model_router:
+            from modules.model_router import ModelRequest
+            req = ModelRequest(
+                task_type=worker.worker_type.value if hasattr(worker.worker_type, "value") else str(worker.worker_type),
+                worker_id=worker.worker_id,
+                task_id=worker.task_id,
+                project_id=worker.project_id
+            )
+            return self.engine.model_router.route(req)
+        return None
+
     def execute_worker(self, worker: Worker, task: PersistentTask) -> WorkerResult:
         """
         Execute a single worker synchronously (called within a thread).

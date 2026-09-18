@@ -39,6 +39,7 @@ from core.state import (
 )
 from core.prompts import PLANNING_PROMPT_TEMPLATE
 from brain.router import LLMRouter
+from modules.model_router import ModelRouter
 from tools.registry import ToolRegistry
 from tools.filesystem import ReadFileTool, WriteFileTool, PatchFileTool, ListDirTool
 from tools.terminal import TerminalExecutionTool, TestRunnerTool
@@ -161,6 +162,7 @@ class ZaraEngine:
         self.max_retries_per_step = max_retries_per_step
         self.max_total_retries = max_total_retries
         self.max_execution_time_seconds = max_execution_time_seconds
+        self._created_at = time.time()
         self.max_research_queries = max_research_queries or MAX_RESEARCH_QUERIES
         self.max_sources = max_sources or MAX_SOURCES
         self.max_pages = max_pages or MAX_PAGES
@@ -168,7 +170,14 @@ class ZaraEngine:
         self.project_manager = project_manager
 
         # Subsystems
-        self.brain = LLMRouter()
+        # Phase 10: Event Bus, Scheduler, Notifications & Autonomous Subsystems
+        self.clock = clock or SystemClock()
+        self.event_bus = event_bus or EventBus()
+        self.scheduler = scheduler or PersistentScheduler(clock=self.clock)
+
+        # Subsystems & Phase 16 Model Router
+        self.model_router = ModelRouter(event_bus=self.event_bus)
+        self.brain = self.model_router
         self.memory = MemoryStore()
         self.memory_extractor = MemoryExtractor()
         self.execution = ExecutionEngine(str(self.workspace_root), use_docker=use_docker)
@@ -187,10 +196,6 @@ class ZaraEngine:
         self.cyber_lab = CyberLabManager()
         self.blender = BlenderModule()
 
-        # Phase 10: Event Bus, Scheduler, Notifications & Autonomous Subsystems
-        self.clock = clock or SystemClock()
-        self.event_bus = event_bus or EventBus()
-        self.scheduler = scheduler or PersistentScheduler(clock=self.clock)
         self.notifications = notifications or NotificationManager(voice_synthesizer=self.voice)
         self.autonomous = autonomous or AutonomousModeManager()
         self.daily_queue = DailyQueueSynthesizer(scheduler=self.scheduler, project_manager=self.project_manager)
@@ -1445,6 +1450,9 @@ class ZaraEngine:
 
         # 1. PERCEIVE
         context = self.perceive(task, tag)
+        if hasattr(self, "_created_at") and self._created_at is not None:
+            context.start_time = min(context.start_time, self._created_at)
+            self._created_at = None
 
         # 2. PLAN
         self.plan(context, custom_steps=steps)
@@ -1827,6 +1835,11 @@ class ZaraEngine:
         if hasattr(self, "resource_manager") and self.resource_manager:
             try:
                 self.resource_manager.clear()
+            except Exception:
+                pass
+        if hasattr(self, "model_router") and self.model_router:
+            try:
+                self.model_router.close()
             except Exception:
                 pass
         if hasattr(self, "memory") and hasattr(self.memory, "close"):

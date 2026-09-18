@@ -156,3 +156,16 @@ WORKER_LOCK_TIMEOUT_SECONDS = float(os.getenv("ZARA_WORKER_LOCK_TIMEOUT", "30.0"
 WORKERS_DIR = LOGS_DIR / "workers"
 WORKERS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Phase 16: AI Model Router, Provider Abstraction & Intelligent Failover
+MODEL_ROUTER_ENABLED = os.getenv("ZARA_MODEL_ROUTER_ENABLED", "true").lower() in ("true", "1", "yes")
+DEFAULT_MODEL = os.getenv("ZARA_DEFAULT_MODEL", "gemini-2.5-flash")
+MODEL_REQUEST_TIMEOUT = float(os.getenv("ZARA_MODEL_REQUEST_TIMEOUT", "60.0"))
+MAX_MODEL_RETRIES = int(os.getenv("ZARA_MAX_MODEL_RETRIES", "3"))
+MAX_PROVIDER_FAILOVERS = int(os.getenv("ZARA_MAX_PROVIDER_FAILOVERS", "3"))
+MODEL_HEALTH_TTL = float(os.getenv("ZARA_MODEL_HEALTH_TTL", "300.0"))
+MODEL_SELECTION_MODE = os.getenv("ZARA_MODEL_SELECTION_MODE", "capability")
+MAX_COST_PER_REQUEST = float(os.getenv("ZARA_MAX_COST_PER_REQUEST", "2.0"))
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("ZARA_CIRCUIT_BREAKER_THRESHOLD", "3"))
+CIRCUIT_BREAKER_COOLDOWN_SECONDS = float(os.getenv("ZARA_CIRCUIT_BREAKER_COOLDOWN", "60.0"))
+MODELS_DISCOVERY_CACHE_FILE = CONFIG_DIR / "models_cache.json"
+

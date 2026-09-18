@@ -884,4 +884,84 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Worker not found")
         return {"status": "CANCELLED", "worker_id": worker_id}
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # REST API: AI Model Router & Providers (Phase 16)
+    # ──────────────────────────────────────────────────────────────────────────
+    @app.get("/api/models")
+    async def get_models(provider: Optional[str] = None):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "model_router") or not eng.model_router:
+            return {"models": [], "total": 0}
+
+        models = eng.model_router.registry.list_models(provider=provider)
+        return redact_sensitive_data({
+            "models": [m.to_dict() for m in models],
+            "total": len(models)
+        })
+
+    @app.get("/api/models/status")
+    async def get_models_status():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "model_router") or not eng.model_router:
+            return {"status": "OFFLINE", "active_provider": "none"}
+        return redact_sensitive_data(eng.model_router.get_status())
+
+    @app.get("/api/models/health")
+    async def get_models_health():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "model_router") or not eng.model_router:
+            return {"providers": {}}
+
+        health_data = {}
+        for name in eng.model_router.providers:
+            health_data[name] = eng.model_router.health_tracker.get_health(name)
+        return redact_sensitive_data({"providers": health_data})
+
+    @app.get("/api/models/routing")
+    async def get_models_routing():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "model_router") or not eng.model_router:
+            return {"routes": []}
+
+        from modules.model_router import ModelRequest
+        sample_tasks = ["general_qa", "coding", "debugging", "research", "vision", "cyber_lab", "synthesis"]
+        routes = []
+        for st in sample_tasks:
+            sel = eng.model_router.route(ModelRequest(task_type=st))
+            routes.append({
+                "task_type": st,
+                "selected_provider": sel.provider,
+                "selected_model": sel.model_id,
+                "reason": sel.reason,
+                "fallback_chain": sel.fallback_chain
+            })
+        return redact_sensitive_data({"routes": routes})
+
+    @app.get("/api/models/circuit-breakers")
+    async def get_models_circuit_breakers():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "model_router") or not eng.model_router:
+            return {"circuit_breakers": {}}
+
+        return redact_sensitive_data({
+            "circuit_breakers": {
+                name: cb.to_dict() for name, cb in eng.model_router.circuit_breakers.items()
+            }
+        })
+
+    @app.post("/api/models/test")
+    async def test_model_provider(payload: Dict[str, Any]):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "model_router") or not eng.model_router:
+            raise HTTPException(status_code=503, detail="Model router offline")
+
+        prov_name = payload.get("provider", "mock")
+        prov = eng.model_router.providers.get(prov_name)
+        if not prov:
+            raise HTTPException(status_code=404, detail=f"Provider '{prov_name}' not found")
+
+        h = prov.health()
+        return redact_sensitive_data({"success": h.get("available", False), "health": h})
+
     return app
+

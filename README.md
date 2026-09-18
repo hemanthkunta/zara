@@ -155,6 +155,33 @@ Start an interactive chat session with ZARA:
 ./zara.py workers cancel wkr_12345678
 ```
 
+### AI Model Router & Provider Failover (Phase 16)
+```bash
+# View active provider, model, latency, and router metrics
+./zara.py models status
+
+# List all registered AI models, capabilities, and availability
+./zara.py models list
+
+# Filter models by provider
+./zara.py models list --provider google
+
+# Inspect operational health, average latency, and error counts
+./zara.py models health
+
+# View task-to-model routing table and decision rationale
+./zara.py models routing
+
+# Inspect circuit breaker states (HEALTHY, DEGRADED, OPEN, HALF_OPEN)
+./zara.py models circuit-breakers
+
+# Discover available models from environment/SDKs
+./zara.py models discover
+
+# Run operational test ping on a provider
+./zara.py models test mock
+```
+
 ### Inspect Task Recovery Checkpoints
 ```bash
 ./zara.py recover
@@ -177,7 +204,8 @@ Start an interactive chat session with ZARA:
 - **Strict Scope Verification**: Security auditing is restricted to pre-approved hosts in `config/security_scope.json` (`localhost`, `127.0.0.1`). Any external target triggers a `ScopeViolationError`.
 - **Destructive Command Interception**: Commands containing `rm -rf /`, `DROP TABLE`, `git push --force`, or fork bombs are blocked by the safety interceptor.
 - **Draft-Only Job Hunter**: Job applications are enqueued to `queue/job_applications/` for manual human approval. Automated submission is prohibited.
-- **Secret Scrubbing**: API keys, auth tokens, and passwords are automatically redacted from logs and memory entries.
+- **Secret Scrubbing**: API keys, auth tokens, and passwords are automatically redacted from logs, events, and memory entries.
+- **Model Router Safety**: Tool-call safety ensures models propose actions without executing them; circuit breakers isolate failing providers, with strict offline mock fallback.
 - **Bounded Retries**: Maximum 5 diagnostic attempts per step before escalating to human input.
 
 ---
@@ -213,6 +241,7 @@ Start an interactive chat session with ZARA:
 │   ├── terminal.py              # Sandboxed command and test runner tools
 │   └── macos_control.py         # macOS notifications, clipboard, screenshots
 ├── modules/
+│   ├── model_router.py          # AI model router, capability discovery & circuit breakers (Phase 16)
 │   ├── resource_locking.py      # Granular resource lock manager (Phase 15)
 │   ├── workers.py               # Delegated worker profiles & workstream orchestrator (Phase 15)
 │   ├── coding.py                # AST analysis, diff calculation & file operations
@@ -232,7 +261,7 @@ Start an interactive chat session with ZARA:
 │   └── orchestrator.py          # Multi-task queue state manager
 ├── gui/
 │   └── app.py                   # Desktop GUI with state machine visualization
-├── ui/                          # Unified Command Center & Control UI (Phase 13/14/15)
+├── ui/                          # Unified Command Center & Control UI (Phase 13/14/15/16)
 ├── memory/
 │   ├── zara_log.md              # Human-readable append-only lessons
 │   ├── episodes.jsonl           # Structured episodic memory
@@ -257,5 +286,8 @@ Start an interactive chat session with ZARA:
     ├── test_memory_integration.py # Phase 14 full-system integration tests
     ├── test_workers_core.py     # Phase 15 worker state, types, budgets & lifecycles
     ├── test_resource_locking.py # Phase 15 granular resource manager & contention
-    └── test_parallel_orchestration.py # Phase 15 parallel DAG execution, UI & CLI
+    ├── test_parallel_orchestration.py # Phase 15 parallel DAG execution, UI & CLI
+    ├── test_model_router_core.py # Phase 16 model router, providers, retry & fallback
+    ├── test_model_health_and_circuit.py # Phase 16 provider health tracking & circuit breaker
+    └── test_model_integration.py # Phase 16 worker routing, engine & UI integration
 ```

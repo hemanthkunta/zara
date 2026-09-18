@@ -62,11 +62,20 @@ class EventType(str, Enum):
     WORKER_RESOURCE_RELEASED = "worker_resource_released"
     PARALLEL_BATCH_STARTED = "parallel_batch_started"
     PARALLEL_BATCH_COMPLETED = "parallel_batch_completed"
+    MODEL_REQUEST_STARTED = "model_request_started"
+    MODEL_SELECTED = "model_selected"
+    MODEL_REQUEST_COMPLETED = "model_request_completed"
+    MODEL_REQUEST_FAILED = "model_request_failed"
+    MODEL_RETRY = "model_retry"
+    MODEL_FAILOVER = "model_failover"
+    PROVIDER_HEALTH_CHANGED = "provider_health_changed"
+    CIRCUIT_BREAKER_OPENED = "circuit_breaker_opened"
+    CIRCUIT_BREAKER_CLOSED = "circuit_breaker_closed"
     CUSTOM = "custom"
 
 
 def sanitize_event_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Sanitize external untrusted event payloads against prompt injection overrides."""
+    """Sanitize external untrusted event payloads against prompt injection overrides and secrets."""
     clean = {}
     injection_patterns = [
         r"(?i)\bignore\s+previous\s+instructions\b",
@@ -79,6 +88,7 @@ def sanitize_event_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             sanitized_str = v
             for pat in injection_patterns:
                 sanitized_str = re.sub(pat, "[SANITIZED_PROMPT_INJECTION]", sanitized_str)
+            sanitized_str = audit_logger.scrub_secrets(sanitized_str)
             clean[k] = sanitized_str
         elif isinstance(v, dict):
             clean[k] = sanitize_event_payload(v)

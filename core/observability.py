@@ -12,7 +12,7 @@ from config.settings import AUDIT_LOG_FILE, SYSTEM_LOG_FILE
 # Regex patterns for redacting sensitive secrets
 SECRET_PATTERNS = [
     (r'(?i)(api[-_]?key|auth[-_]?token|secret|password|bearer\s+)[:=]\s*["\']?([^"\'\s]+)["\']?', r'\1: [REDACTED]'),
-    (r'sk-[a-zA-Z0-9]{20,}', '[REDACTED_API_KEY]'),
+    (r'sk-[a-zA-Z0-9_-]{20,}', '[REDACTED_API_KEY]'),
     (r'AIzaSy[a-zA-Z0-9_-]{33}', '[REDACTED_GEMINI_KEY]'),
 ]
 

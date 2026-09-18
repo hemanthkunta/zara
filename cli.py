@@ -868,6 +868,85 @@ def cmd_workers(args):
     finally:
         engine.close()
 
+def cmd_models(args):
+    """Inspect and manage AI models, providers, health, and routing (Phase 16)."""
+    from modules.model_router import ModelRouter, ModelRequest
+
+    action = getattr(args, "models_action", None) or "status"
+    engine = ZaraEngine()
+
+    try:
+        router = engine.model_router
+
+        if action == "status":
+            st = router.get_status()
+            print(f"\n{Colors.BOLD}=== ZARA AI MODEL ROUTER ==={Colors.END}")
+            print(f"Active Provider:     {Colors.GREEN}{st['active_provider']}{Colors.END}")
+            print(f"Active Model:        {st['active_model']}")
+            print(f"Router Status:       {Colors.GREEN}{st['status']}{Colors.END}")
+            print(f"Registered Models:   {st['models_count']}")
+            metrics = st.get("metrics", {})
+            print(f"Requests Total:      {metrics.get('requests_total', 0)}")
+            print(f"Requests Succeeded:  {Colors.GREEN}{metrics.get('requests_successful', 0)}{Colors.END}")
+            print(f"Requests Failed:     {Colors.RED}{metrics.get('requests_failed', 0)}{Colors.END}")
+            print(f"Failovers:           {Colors.YELLOW}{metrics.get('failovers_total', 0)}{Colors.END}")
+            print(f"Retries:             {metrics.get('retries_total', 0)}\n")
+
+        elif action == "list":
+            provider_filter = getattr(args, "provider", None)
+            models = router.registry.list_models(provider=provider_filter)
+            print(f"\n{Colors.BOLD}=== REGISTERED AI MODELS ({len(models)}) ==={Colors.END}")
+            for m in models:
+                avail_color = Colors.GREEN if m.availability.value in ("available", "healthy") else Colors.CYAN
+                caps_str = ", ".join(c.value for c in m.capabilities)
+                print(f"[{m.provider:<10}] {m.model_id:<28} | Avail: {avail_color}{m.availability.value.upper():<10}{Colors.END} | Window: {m.context_window:<8} | Caps: {caps_str}")
+            print()
+
+        elif action == "health":
+            print(f"\n{Colors.BOLD}=== MODEL PROVIDERS HEALTH ==={Colors.END}")
+            for prov_name in router.providers:
+                h = router.health_tracker.get_health(prov_name)
+                h_color = Colors.GREEN if h["status"] in ("healthy", "configured", "unknown") else Colors.RED
+                print(f"Provider: {prov_name:<12} | Status: {h_color}{h['status'].upper():<12}{Colors.END} | Latency: {h['avg_latency_ms']:.1f}ms | Errors: {h['error_count']}")
+            print()
+
+        elif action == "routing":
+            tasks = ["general_qa", "coding", "debugging", "research", "vision", "cyber_lab", "synthesis"]
+            print(f"\n{Colors.BOLD}=== AI MODEL ROUTING TABLE ==={Colors.END}")
+            for t in tasks:
+                sel = router.route(ModelRequest(task_type=t))
+                print(f"Task: {t:<15} -> Provider: {sel.provider:<10} Model: {sel.model_id:<26} ({sel.reason})")
+            print()
+
+        elif action == "circuit-breakers":
+            print(f"\n{Colors.BOLD}=== CIRCUIT BREAKERS ==={Colors.END}")
+            for name, cb in router.circuit_breakers.items():
+                cb_dict = cb.to_dict()
+                cb_color = Colors.GREEN if cb_dict["state"] == "healthy" else (
+                    Colors.YELLOW if cb_dict["state"] in ("degraded", "half_open") else Colors.RED
+                )
+                print(f"Provider: {name:<12} | State: {cb_color}{cb_dict['state'].upper():<10}{Colors.END} | Failures: {cb_dict['failure_count']}/{cb_dict['failure_threshold']}")
+            print()
+
+        elif action == "discover":
+            models = router.registry.discover_models()
+            print(f"\n{Colors.GREEN}Model discovery complete. Found {len(models)} models across configured providers.{Colors.END}\n")
+
+        elif action == "test":
+            prov_name = getattr(args, "provider", "mock") or "mock"
+            prov = router.providers.get(prov_name)
+            if not prov:
+                print(f"{Colors.RED}Provider '{prov_name}' not found.{Colors.END}")
+                return
+            h = prov.health()
+            if h.get("available"):
+                print(f"{Colors.GREEN}Provider '{prov_name}' is operational. Latency: {h.get('latency_ms', 0)}ms{Colors.END}")
+            else:
+                print(f"{Colors.YELLOW}Provider '{prov_name}' is not currently available: {h.get('error', 'unknown')}{Colors.END}")
+
+    finally:
+        engine.close()
+
 def main():
     parser = argparse.ArgumentParser(description="ZARA Autonomous Agent CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -1045,6 +1124,22 @@ def main():
     wk_locks = workers_sub.add_parser("locks", help="List active resource locks")
     wk_graph = workers_sub.add_parser("graph", help="Display workstream task DAG")
 
+    # models command (Phase 16)
+    models_p = subparsers.add_parser("models", help="Inspect and control AI model router, providers, and failover")
+    models_sub = models_p.add_subparsers(dest="models_action", help="Model router operations")
+
+    models_sub.add_parser("status", help="Show active provider, model, and router metrics")
+    m_list = models_sub.add_parser("list", help="List registered models and capabilities")
+    m_list.add_argument("--provider", type=str, default=None, help="Filter by provider")
+
+    models_sub.add_parser("health", help="Show provider health, latency, and error counts")
+    models_sub.add_parser("routing", help="Display task-to-model routing table")
+    models_sub.add_parser("circuit-breakers", help="Inspect circuit breaker states")
+    models_sub.add_parser("discover", help="Discover available models from environment")
+
+    m_test = models_sub.add_parser("test", help="Test operational health of a provider")
+    m_test.add_argument("provider", type=str, nargs="?", default="mock", help="Provider name to test (default: mock)")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -1074,7 +1169,8 @@ def main():
         "decisions": cmd_decisions,
         "world": cmd_world,
         "ui": cmd_ui,
-        "workers": cmd_workers
+        "workers": cmd_workers,
+        "models": cmd_models
     }
     commands[args.command](args)
 

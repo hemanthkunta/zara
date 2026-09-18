@@ -193,6 +193,25 @@
         </div>
       </section>
 
+      <!-- AI Model Router & Providers Panel (Phase 16) -->
+      <section class="card panel-models">
+        <div class="card-header">
+          <h3>AI Model Router</h3>
+          <span id="model-router-badge" class="tag tag-success">HEALTHY</span>
+        </div>
+        <div class="card-body">
+          <div class="model-meta-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px; margin-bottom: 8px;">
+            <div><strong>Provider:</strong> <span id="model-active-provider">mock</span></div>
+            <div><strong>Model:</strong> <span id="model-active-name" class="truncate">default</span></div>
+            <div><strong>Avg Latency:</strong> <span id="model-avg-latency">0.0ms</span></div>
+            <div><strong>Failovers:</strong> <span id="model-failovers-count">0</span></div>
+          </div>
+          <div id="models-list-container" style="max-height: 120px; overflow-y: auto; font-size: 11px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 6px;">
+            <div class="empty-placeholder" style="color: #718096;">Loading configured models...</div>
+          </div>
+        </div>
+      </section>
+
       <!-- Tool & Terminal Execution Stream -->
       <section class="card panel-terminal">
         <div class="card-header">

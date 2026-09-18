@@ -625,6 +625,47 @@
     }
   };
 
+  // Model Router fetcher (Phase 16)
+  const fetchModels = async () => {
+    try {
+      const res = await fetch("/api/models/status");
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const provElem = document.getElementById("model-active-provider");
+      const nameElem = document.getElementById("model-active-name");
+      const latElem = document.getElementById("model-avg-latency");
+      const failElem = document.getElementById("model-failovers-count");
+      const badgeElem = document.getElementById("model-router-badge");
+
+      if (provElem) provElem.textContent = data.active_provider || "mock";
+      if (nameElem) nameElem.textContent = data.active_model || "default";
+      if (latElem) latElem.textContent = data.metrics ? `${Math.round(data.metrics.average_latency || 0)}ms` : "0ms";
+      if (failElem) failElem.textContent = data.metrics ? (data.metrics.failovers_total || 0) : 0;
+      if (badgeElem) {
+        badgeElem.textContent = data.status || "HEALTHY";
+        badgeElem.className = data.status === "HEALTHY" ? "tag tag-success" : "tag tag-warning";
+      }
+
+      // Fetch model catalog
+      const mRes = await fetch("/api/models");
+      if (!mRes.ok) return;
+      const mData = await mRes.json();
+      const listContainer = document.getElementById("models-list-container");
+      if (listContainer && mData.models) {
+        listContainer.innerHTML = mData.models.slice(0, 5).map(m => {
+          const availTag = m.availability === "available" ? "tag-success" : (m.availability === "configured" ? "tag-info" : "tag-dim");
+          return `<div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0;">
+            <span style="font-size: 10px; font-weight: 500;">${escapeHtml(m.display_name || m.model_id)}</span>
+            <span class="tag ${availTag}" style="font-size: 8px;">${escapeHtml((m.availability || "configured").toUpperCase())}</span>
+          </div>`;
+        }).join("");
+      }
+    } catch (err) {
+      console.error("fetchModels failed:", err);
+    }
+  };
+
   // Initial Boot
   connectWebSocket();
   fetchStatus();
@@ -633,11 +674,13 @@
   fetchProject();
   fetchMemory();
   fetchWorkers();
+  fetchModels();
 
   // Periodic status poll (every 5 seconds)
   setInterval(() => {
     fetchStatus();
     fetchMemory();
     fetchWorkers();
+    fetchModels();
   }, 5000);
 })();
