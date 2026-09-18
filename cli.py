@@ -197,6 +197,97 @@ def cmd_voice_test(args):
     voice.speak("Greetings. I am ZARA, your autonomous engineering and research agent. Voice interface is online.", async_mode=False)
     print(f"{Colors.GREEN}Voice test completed.{Colors.END}")
 
+def cmd_project(args):
+    from modules.workspace import ProjectManager, discover_projects
+    from config.settings import PROJECTS_DIR
+
+    action = getattr(args, "project_action", None) or "list"
+
+    def _resolve_project(target: Optional[str]) -> Optional[ProjectManager]:
+        if not target:
+            # Check current directory
+            if (Path.cwd() / ".zara" / "project.json").exists():
+                return ProjectManager.load(Path.cwd())
+            return None
+        # Check by direct path
+        target_path = Path(target).resolve()
+        if (target_path / ".zara" / "project.json").exists():
+            return ProjectManager.load(target_path)
+        # Check by subdirectory under PROJECTS_DIR
+        cand = PROJECTS_DIR / target
+        if (cand / ".zara" / "project.json").exists():
+            return ProjectManager.load(cand)
+        # Search all discovered
+        for p in discover_projects():
+            if p.get("id") == target or p.get("name") == target:
+                return ProjectManager.load(Path(p["path"]))
+        return None
+
+    if action == "create":
+        name = args.name
+        path = Path(args.path).resolve() if getattr(args, "path", None) else (PROJECTS_DIR / name).resolve()
+        mgr = ProjectManager.create(name=name, workspace_path=path, description=getattr(args, "desc", "") or "")
+        print(f"{Colors.GREEN}✔ Project '{mgr.project.name}' created at {mgr.workspace_path} (ID: {mgr.project.project_id}){Colors.END}")
+    elif action == "list":
+        projects = discover_projects()
+        if not projects:
+            print("No persistent projects found.")
+        else:
+            print(f"\n{Colors.BOLD}=== ZARA PERSISTENT PROJECTS ==={Colors.END}")
+            for p in projects:
+                print(f"  • {Colors.CYAN}{p['name']}{Colors.END} [{p['id']}] - Status: {p['status']} ({p['path']})")
+            print()
+    elif action == "status":
+        mgr = _resolve_project(getattr(args, "target", None))
+        if not mgr:
+            print(f"{Colors.RED}Project not found.{Colors.END}")
+            return
+        status = mgr.get_status()
+        print(f"\n{Colors.BOLD}ZARA PROJECT{Colors.END}")
+        print("────────────────────────────")
+        print(f"Name: {status['name']}")
+        print(f"ID: {status['project_id']}")
+        print(f"Status: {status['status'].upper()}")
+        print(f"Workspace: {status['workspace_path']}")
+        print(f"\nProgress:")
+        print(f"{status['tasks_passed']} / {status['tasks_total']} tasks complete")
+        print(f"\nArtifacts:\n{status['artifacts_count']}")
+        print(f"\nCheckpoints:\n{status['checkpoints_count']}")
+        budget = status['budget']
+        print(f"\nBudget:\nSteps: {budget['steps_taken']} / {budget['max_steps']} | Retries: {budget['retries_used']} / {budget['max_retries']}")
+        print(f"Tool Calls: {budget['tool_calls']} / {budget['max_tool_calls']}")
+        print()
+    elif action == "pause":
+        mgr = _resolve_project(getattr(args, "target", None))
+        if not mgr:
+            print(f"{Colors.RED}Project not found.{Colors.END}")
+            return
+        mgr.pause_project()
+        print(f"{Colors.YELLOW}Project '{mgr.project.name}' paused.{Colors.END}")
+    elif action == "resume":
+        mgr = _resolve_project(getattr(args, "target", None))
+        if not mgr:
+            print(f"{Colors.RED}Project not found.{Colors.END}")
+            return
+        res = mgr.resume_project()
+        print(f"{Colors.GREEN}Project '{mgr.project.name}' resumed. Status: {res['status']}{Colors.END}")
+    elif action == "cancel":
+        mgr = _resolve_project(getattr(args, "target", None))
+        if not mgr:
+            print(f"{Colors.RED}Project not found.{Colors.END}")
+            return
+        mgr.cancel_project()
+        print(f"{Colors.RED}Project '{mgr.project.name}' cancelled.{Colors.END}")
+    elif action == "recover":
+        mgr = _resolve_project(getattr(args, "target", None))
+        if not mgr:
+            print(f"{Colors.RED}Project not found.{Colors.END}")
+            return
+        rec = mgr.recover_project()
+        print(f"{Colors.CYAN}Recovery complete: {rec['classification']} - {rec['action']}{Colors.END}")
+    else:
+        print(f"Unknown project action: {action}")
+
 def cmd_test(args):
     print(f"{Colors.CYAN}Running ZARA test suite...{Colors.END}")
     subprocess.run(["python3", "-m", "unittest", "discover", "tests", "-v"])
@@ -244,6 +335,32 @@ def main():
     # test command
     subparsers.add_parser("test", help="Execute unit and integration test suite")
 
+    # project command
+    proj_p = subparsers.add_parser("project", help="Manage persistent autonomous projects and workspaces")
+    proj_sub = proj_p.add_subparsers(dest="project_action", help="Project operations")
+
+    create_p = proj_sub.add_parser("create", help="Create a new persistent project")
+    create_p.add_argument("name", type=str, help="Project name")
+    create_p.add_argument("--path", type=str, default="", help="Custom project path")
+    create_p.add_argument("--desc", type=str, default="", help="Project description")
+
+    proj_sub.add_parser("list", help="List all persistent projects")
+
+    status_p = proj_sub.add_parser("status", help="Show project status and metrics")
+    status_p.add_argument("target", type=str, nargs="?", default="", help="Project ID, name, or path")
+
+    pause_p = proj_sub.add_parser("pause", help="Pause active project")
+    pause_p.add_argument("target", type=str, nargs="?", default="", help="Project ID, name, or path")
+
+    resume_p = proj_sub.add_parser("resume", help="Resume paused project")
+    resume_p.add_argument("target", type=str, nargs="?", default="", help="Project ID, name, or path")
+
+    cancel_p = proj_sub.add_parser("cancel", help="Cancel project and halt remaining tasks")
+    cancel_p.add_argument("target", type=str, nargs="?", default="", help="Project ID, name, or path")
+
+    recover_p = proj_sub.add_parser("recover", help="Recover interrupted project from checkpoint")
+    recover_p.add_argument("target", type=str, nargs="?", default="", help="Project ID, name, or path")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -263,7 +380,8 @@ def main():
         "gui": cmd_gui,
         "memory": cmd_memory,
         "voice-test": cmd_voice_test,
-        "test": cmd_test
+        "test": cmd_test,
+        "project": cmd_project
     }
     commands[args.command](args)
 

@@ -17,9 +17,10 @@ SECURITY_SCOPE_FILE = CONFIG_DIR / "security_scope.json"
 AUDIT_LOG_FILE = LOGS_DIR / "audit.jsonl"
 SYSTEM_LOG_FILE = LOGS_DIR / "zara.log"
 SCREENSHOTS_DIR = LOGS_DIR / "screenshots"
+PROJECTS_DIR = BASE_DIR / "projects"
 
 # Ensure runtime directories exist
-for directory in (MEMORY_DIR, JOB_QUEUE_DIR, CONFIG_DIR, LOGS_DIR, CHECKPOINTS_DIR, SCREENSHOTS_DIR):
+for directory in (MEMORY_DIR, JOB_QUEUE_DIR, CONFIG_DIR, LOGS_DIR, CHECKPOINTS_DIR, SCREENSHOTS_DIR, PROJECTS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 # Risk Levels for Human Confirmation System

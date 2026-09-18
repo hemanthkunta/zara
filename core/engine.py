@@ -92,7 +92,8 @@ class ZaraEngine:
         max_research_queries: Optional[int] = None,
         max_sources: Optional[int] = None,
         max_pages: Optional[int] = None,
-        max_research_time_seconds: Optional[int] = None
+        max_research_time_seconds: Optional[int] = None,
+        project_manager: Optional[Any] = None
     ):
         self.workspace_root = Path(workspace_root).resolve()
         self.use_docker = use_docker
@@ -105,6 +106,7 @@ class ZaraEngine:
         self.max_sources = max_sources or MAX_SOURCES
         self.max_pages = max_pages or MAX_PAGES
         self.max_research_time_seconds = max_research_time_seconds or MAX_RESEARCH_TIME_SECONDS
+        self.project_manager = project_manager
 
         # Subsystems
         self.brain = LLMRouter()
@@ -196,8 +198,19 @@ class ZaraEngine:
             duration_seconds=(duration_ms / 1000.0) if duration_ms else 0.0,
             extra=audit_extra
         )
+        if self.project_manager and getattr(self.project_manager, "journal", None):
+            try:
+                self.project_manager.journal.append(
+                    event_type=event,
+                    task_id=f"step_{step_id}" if step_id is not None else getattr(context, "task", None),
+                    payload={"tool": tool, "status": status, **(extra or {})}
+                )
+            except Exception:
+                pass
 
-    # 1. PERCEIVE
+    def set_project_manager(self, pm) -> None:
+        """Set persistent project manager for workspace-bound operations."""
+        self.project_manager = pm
     def perceive(self, task: str, tag: str = "dev") -> TaskContext:
         """Read task, query memory for prior lessons, and inspect repo state."""
         self.voice.speak(f"Perceiving task: {task[:60]}")
@@ -402,6 +415,9 @@ class ZaraEngine:
         self._record_event(context, "tool_selected", step_id=step.id, tool=tool_ident)
         start_t = time.time()
         self._record_event(context, "tool_started", step_id=step.id, tool=tool_ident)
+
+        if self.project_manager and getattr(self.project_manager, "project", None):
+            self.project_manager.project.budget.record(tools=1)
 
         result: ExecutionResult
         raw_return_val = None
@@ -739,6 +755,21 @@ class ZaraEngine:
         step.status = StepStatus.PASSED
         if context:
             self._record_event(context, "verification_finished", step_id=step.id, status="passed", extra={"evidence": evidence})
+
+        if self.project_manager and getattr(self.project_manager, "artifacts", None):
+            try:
+                if step.tool in ("write_file", "patch_file") or step.action_type == ActionType.CODE:
+                    fpath = args.get("path") or args.get("file_path") or step.target
+                    if fpath:
+                        self.project_manager.artifacts.register(
+                            rel_or_abs_path=fpath,
+                            task_id=f"step_{step.id}",
+                            project_id=self.project_manager.project.project_id if self.project_manager.project else "proj",
+                            artifact_type="code"
+                        )
+            except Exception:
+                pass
+
         return True
 
     # 5. DIAGNOSE & RETRY
@@ -747,6 +778,8 @@ class ZaraEngine:
         previous_attempts: List[Dict[str, Any]] = []
 
         while step.attempts < self.max_retries_per_step:
+            if self.project_manager and getattr(self.project_manager, "project", None):
+                self.project_manager.project.budget.record(retries=1)
             if context.total_retries >= self.max_total_retries:
                 step.status = StepStatus.BLOCKED
                 context.requires_human_input = True
@@ -944,6 +977,31 @@ class ZaraEngine:
         steps: Optional[List[PlanStep]] = None
     ) -> Dict[str, Any]:
         """Full autonomous state machine loop."""
+        # 0. Check Project Budget if running within a ProjectManager
+        if self.project_manager and getattr(self.project_manager, "project", None):
+            exceeded, reason = self.project_manager.project.budget.is_exceeded()
+            if exceeded:
+                context = self.perceive(task, tag)
+                context.is_completed = False
+                context.requires_human_input = True
+                context.blocker_reason = f"Project budget exceeded: {reason}"
+                self._record_event(context, "budget_exceeded", extra={"reason": reason})
+                reflection = self.reflect(context)
+                self.persist(reflection)
+                return {
+                    "task": context.task,
+                    "status": "BLOCKED",
+                    "steps_total": 0,
+                    "steps_passed": 0,
+                    "steps_skipped": 0,
+                    "steps_failed": 0,
+                    "blocker_reason": context.blocker_reason,
+                    "reflection": reflection.to_markdown(),
+                    "past_lessons_used": len(context.past_lessons),
+                    "total_retries": 0,
+                    "events_count": len(context.events)
+                }
+
         # 1. PERCEIVE
         context = self.perceive(task, tag)
 
@@ -1035,9 +1093,38 @@ class ZaraEngine:
 
             # Save checkpoint after each verified step for crash recovery
             self.recovery.save_checkpoint(context)
+            if self.project_manager and getattr(self.project_manager, "project", None):
+                try:
+                    self.project_manager.create_checkpoint(
+                        task_id=f"step_{step.id}",
+                        state_snapshot={"current_step_index": i, "task": context.task},
+                        completed_steps=[{"id": s.id, "title": s.title, "status": s.status.value} for s in context.steps[:i+1]],
+                        pending_steps=[{"id": s.id, "title": s.title, "status": s.status.value} for s in context.steps[i+1:]],
+                        verification=step.verification
+                    )
+                except Exception:
+                    pass
 
         # Check completion
         context.is_completed = bool(context.steps) and all(s.status == StepStatus.PASSED for s in context.steps)
+
+        # Persist pending approval ticket if human confirmation is pending
+        if getattr(context, "pending_confirmation", None) and self.project_manager:
+            try:
+                ticket_dict = context.pending_confirmation.to_dict() if hasattr(context.pending_confirmation, "to_dict") else vars(context.pending_confirmation)
+                self.project_manager.request_approval(ticket_dict)
+            except Exception:
+                pass
+
+        # Record project budget elapsed time and passed steps
+        if self.project_manager and getattr(self.project_manager, "project", None):
+            try:
+                elapsed = time.time() - context.start_time
+                passed_steps = sum(1 for s in context.steps if s.status == StepStatus.PASSED)
+                self.project_manager.project.budget.record(steps=passed_steps, exec_time=elapsed)
+                self.project_manager.save_manifest()
+            except Exception:
+                pass
 
         if context.is_completed:
             self._record_event(context, "task_completed", status="success")
