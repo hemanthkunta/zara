@@ -1,0 +1,43 @@
+{
+  "task": "Build and run hello.py",
+  "tag": "unit_test",
+  "working_dir": "/private/var/folders/xt/rsg7h93j5m7cvx1t6dn5jnjh0000gn/T/zara_test_qf8lf0ln",
+  "current_step_index": 1,
+  "is_completed": false,
+  "requires_human_input": false,
+  "blocker_reason": null,
+  "steps": [
+    {
+      "id": 1,
+      "title": "Create hello file",
+      "action_type": "code",
+      "description": "Write hello.py",
+      "target": "hello.py",
+      "payload": {
+        "file_path": "hello.py",
+        "content": "print('HELLO FROM ZARA')\n"
+      },
+      "success_condition": "File hello.py written successfully",
+      "status": "passed",
+      "attempts": 1,
+      "actual_output": "Wrote file hello.py",
+      "error_message": null
+    },
+    {
+      "id": 2,
+      "title": "Execute hello script",
+      "action_type": "execute",
+      "description": "Run python3 hello.py",
+      "target": "python3 hello.py",
+      "payload": {
+        "command": "python3 hello.py"
+      },
+      "success_condition": "Output contains HELLO FROM ZARA",
+      "status": "passed",
+      "attempts": 1,
+      "actual_output": "HELLO FROM ZARA\n",
+      "error_message": null
+    }
+  ],
+  "checkpoint_time": "2026-09-18T04:42:38.391704+00:00"
+}

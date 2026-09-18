@@ -1,0 +1,7 @@
+{
+  "preferred_editor": "vscode",
+  "default_language": "python",
+  "style_guide": "pep8",
+  "test_framework": "unittest",
+  "risk_tolerance": "moderate"
+}
