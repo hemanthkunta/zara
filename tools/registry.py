@@ -75,6 +75,9 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
+    def list_tool_names(self) -> List[str]:
+        return list(self._tools.keys())
+
     def execute(
         self,
         tool_name: str,

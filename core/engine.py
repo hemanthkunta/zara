@@ -75,6 +75,20 @@ from modules.orchestrator import TaskOrchestrator
 from modules.self_improvement import SelfImprovementEvaluator
 from modules.verification import VerificationEngine
 from modules.vision import VisionModule
+from modules.cyber_lab import CyberLabManager
+from modules.blender import BlenderModule
+from tools.cyber_tools import (
+    CyberLabScanTool,
+    CyberWebAuditTool,
+    CyberSQLTestTool,
+    CyberExploitCheckTool
+)
+from tools.blender_tools import (
+    BlenderScriptTool,
+    BlenderExecuteTool,
+    BlenderInspectTool,
+    BlenderRenderTool
+)
 from core.recovery import RecoveryManager
 from core.observability import audit_logger
 
@@ -124,6 +138,8 @@ class ZaraEngine:
         self.recovery = RecoveryManager()
         self.self_improvement = SelfImprovementEvaluator(self.memory)
         self.vision = VisionModule(self.brain)
+        self.cyber_lab = CyberLabManager()
+        self.blender = BlenderModule()
 
         # Initialize Tool Registry
         self.tools = ToolRegistry()
@@ -164,6 +180,16 @@ class ZaraEngine:
         self.tools.register(ApplicationLaunchTool())
         self.tools.register(ApplicationCloseTool())
         self.tools.register(ActiveWindowTool())
+        # Domain Tools: Cybersecurity Lab
+        self.tools.register(CyberLabScanTool(self.cyber_lab))
+        self.tools.register(CyberWebAuditTool(self.cyber_lab))
+        self.tools.register(CyberSQLTestTool(self.cyber_lab))
+        self.tools.register(CyberExploitCheckTool(self.cyber_lab))
+        # Domain Tools: Blender Autonomous 3D
+        self.tools.register(BlenderScriptTool(self.blender))
+        self.tools.register(BlenderExecuteTool(self.blender))
+        self.tools.register(BlenderInspectTool(self.blender))
+        self.tools.register(BlenderRenderTool(self.blender))
 
     def _record_event(
         self,

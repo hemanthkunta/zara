@@ -31,6 +31,13 @@ class ProjectStatus(str, Enum):
     RECOVERING = "recovering"
 
 
+class ProjectType(str, Enum):
+    GENERAL = "general"
+    CYBERSECURITY_ASSESSMENT = "cybersecurity_assessment"
+    BLENDER_SCENE = "blender_scene"
+    BLENDER_ENVIRONMENT = "blender_environment"
+
+
 class RecoveryClassification(str, Enum):
     SAFE_RESUME = "SAFE_RESUME"
     RETRY = "RETRY"
@@ -244,6 +251,7 @@ class PersistentProject:
     description: str
     workspace_path: str
     status: ProjectStatus = ProjectStatus.CREATED
+    project_type: ProjectType = ProjectType.GENERAL
     created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
     current_task_id: Optional[str] = None
@@ -255,6 +263,7 @@ class PersistentProject:
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["status"] = self.status.value if hasattr(self.status, "value") else str(self.status)
+        d["project_type"] = self.project_type.value if hasattr(self.project_type, "value") else str(self.project_type)
         d["budget"] = self.budget.to_dict()
         return d
 
@@ -266,6 +275,13 @@ class PersistentProject:
                 d["status"] = ProjectStatus(d["status"])
             except Exception:
                 d["status"] = ProjectStatus.CREATED
+        if "project_type" in d:
+            try:
+                d["project_type"] = ProjectType(d["project_type"])
+            except Exception:
+                d["project_type"] = ProjectType.GENERAL
+        else:
+            d["project_type"] = ProjectType.GENERAL
         if "budget" in d and isinstance(d["budget"], dict):
             d["budget"] = ProjectBudget.from_dict(d["budget"])
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
@@ -658,7 +674,8 @@ class ProjectManager:
         workspace_path: Path,
         description: str = "",
         metadata: Optional[Dict[str, Any]] = None,
-        budget: Optional[ProjectBudget] = None
+        budget: Optional[ProjectBudget] = None,
+        project_type: ProjectType = ProjectType.GENERAL
     ) -> "ProjectManager":
         """Initialize and persist a brand new project manifest."""
         mgr = cls(workspace_path)
@@ -669,6 +686,7 @@ class ProjectManager:
             description=description,
             workspace_path=str(mgr.workspace_path),
             status=ProjectStatus.CREATED,
+            project_type=project_type,
             metadata=metadata or {},
             budget=budget or ProjectBudget()
         )
@@ -677,7 +695,124 @@ class ProjectManager:
         mgr.journal = ProjectJournal(mgr.journal_file, proj_id)
 
         mgr.save_manifest()
-        mgr.journal.append("PROJECT_CREATED", payload={"name": name, "workspace": str(mgr.workspace_path)})
+        mgr.journal.append("PROJECT_CREATED", payload={"name": name, "workspace": str(mgr.workspace_path), "type": project_type.value})
+        return mgr
+
+    @classmethod
+    def create_cybersecurity_assessment_project(
+        cls,
+        name: str,
+        workspace_path: Path,
+        target_host: str,
+        target_name: str = "Authorized Lab Target",
+        description: str = "",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> "ProjectManager":
+        """Factory template for persistent cybersecurity lab assessment project with structured DAG."""
+        meta = dict(metadata or {})
+        meta.update({
+            "target_host": target_host,
+            "target_name": target_name,
+            "domain": "cybersecurity"
+        })
+        mgr = cls.create(
+            name=name,
+            workspace_path=workspace_path,
+            description=description or f"Cybersecurity lab vulnerability assessment against {target_name} ({target_host})",
+            metadata=meta,
+            project_type=ProjectType.CYBERSECURITY_ASSESSMENT
+        )
+        pid = mgr.project.project_id
+
+        # Construct authoritative security DAG
+        t1 = PersistentTask(id="task_scope_validation", project_id=pid, title="Scope & Authorization Validation", description=f"Validate {target_host} against strict lab allowlist.", capability="cyber")
+        t2 = PersistentTask(id="task_nmap_recon", project_id=pid, title="Nmap Reconnaissance", description="Perform port and service enumeration.", dependencies=["task_scope_validation"], capability="cyber")
+        t3 = PersistentTask(id="task_zap_web_audit", project_id=pid, title="OWASP ZAP Web Audit", description="Scan web endpoints and headers for vulnerabilities.", dependencies=["task_scope_validation"], capability="cyber")
+        t4 = PersistentTask(id="task_sql_injection_audit", project_id=pid, title="SQLMap Injection Audit", description="Test injection points and parameter sanitization.", dependencies=["task_nmap_recon"], capability="cyber")
+        t5 = PersistentTask(id="task_exploitability_assessment", project_id=pid, title="Metasploit Exploitability Assessment", description="Verify exploitability (requires human confirmation ticket).", dependencies=["task_zap_web_audit", "task_sql_injection_audit"], capability="cyber")
+        t6 = PersistentTask(id="task_executive_report", project_id=pid, title="Executive Security Report", description="Synthesize findings, scrub credentials, and generate remediation report.", dependencies=["task_exploitability_assessment"], capability="cyber")
+
+        for t in [t1, t2, t3, t4, t5, t6]:
+            mgr.dag.add_task(t)
+
+        mgr.save_manifest()
+        return mgr
+
+    @classmethod
+    def create_blender_scene_project(
+        cls,
+        name: str,
+        workspace_path: Path,
+        scene_type: str = "basic_mesh",
+        mesh_name: str = "Suzanne",
+        description: str = "",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> "ProjectManager":
+        """Factory template for procedural Blender 3D scene project with inspection and rendering DAG."""
+        meta = dict(metadata or {})
+        meta.update({
+            "scene_type": scene_type,
+            "mesh_name": mesh_name,
+            "domain": "blender"
+        })
+        mgr = cls.create(
+            name=name,
+            workspace_path=workspace_path,
+            description=description or f"Blender procedural 3D scene generation for {mesh_name} ({scene_type})",
+            metadata=meta,
+            project_type=ProjectType.BLENDER_SCENE
+        )
+        pid = mgr.project.project_id
+
+        t1 = PersistentTask(id="task_blender_binary_check", project_id=pid, title="Blender Binary & Environment Verification", description="Verify headless Blender availability.", capability="blender")
+        t2 = PersistentTask(id="task_generate_scene_script", project_id=pid, title="Procedural Script Generation", description=f"Generate Python script for {mesh_name}.", dependencies=["task_blender_binary_check"], capability="blender")
+        t3 = PersistentTask(id="task_ast_security_validation", project_id=pid, title="AST & Security Validation", description="Statically validate syntax and shell command safety.", dependencies=["task_generate_scene_script"], capability="blender")
+        t4 = PersistentTask(id="task_headless_render", project_id=pid, title="Headless Blender Render", description="Execute script and render PNG still.", dependencies=["task_ast_security_validation"], capability="blender")
+        t5 = PersistentTask(id="task_scene_inspection", project_id=pid, title="Scene Hierarchy Inspection", description="Inspect objects, lights, cameras, and materials.", dependencies=["task_headless_render"], capability="blender")
+        t6 = PersistentTask(id="task_vision_verification", project_id=pid, title="Vision Feedback Inspection", description="Verify rendered output against expected visual elements.", dependencies=["task_scene_inspection"], capability="vision")
+
+        for t in [t1, t2, t3, t4, t5, t6]:
+            mgr.dag.add_task(t)
+
+        mgr.save_manifest()
+        return mgr
+
+    @classmethod
+    def create_blender_environment_project(
+        cls,
+        name: str,
+        workspace_path: Path,
+        tree_count: int = 20,
+        description: str = "",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> "ProjectManager":
+        """Factory template for procedural forest environment project with undulating terrain and lighting DAG."""
+        meta = dict(metadata or {})
+        meta.update({
+            "scene_type": "forest",
+            "tree_count": tree_count,
+            "domain": "blender"
+        })
+        mgr = cls.create(
+            name=name,
+            workspace_path=workspace_path,
+            description=description or f"Blender procedural forest environment generation with {tree_count} trees and undulating terrain",
+            metadata=meta,
+            project_type=ProjectType.BLENDER_ENVIRONMENT
+        )
+        pid = mgr.project.project_id
+
+        t1 = PersistentTask(id="task_env_addon_check", project_id=pid, title="Easy Tree Addon Detection", description="Check for modular_tree addon or use procedural fallback.", capability="blender")
+        t2 = PersistentTask(id="task_env_generate_script", project_id=pid, title="Forest Environment Script Generation", description=f"Generate forest script with {tree_count} trees.", dependencies=["task_env_addon_check"], capability="blender")
+        t3 = PersistentTask(id="task_env_ast_validation", project_id=pid, title="AST Security Validation", description="Validate procedural environment script.", dependencies=["task_env_generate_script"], capability="blender")
+        t4 = PersistentTask(id="task_env_headless_render", project_id=pid, title="Headless Environment Render", description="Render realistic forest environment still.", dependencies=["task_env_ast_validation"], capability="blender")
+        t5 = PersistentTask(id="task_env_scene_inspection", project_id=pid, title="Environment Scene Inspection", description="Validate tree trunks, foliage, lighting, and terrain meshes.", dependencies=["task_env_headless_render"], capability="blender")
+        t6 = PersistentTask(id="task_env_vision_verification", project_id=pid, title="Vision Feedback Verification", description="Verify presence of terrain, canopy, and lighting in output render.", dependencies=["task_env_scene_inspection"], capability="vision")
+
+        for t in [t1, t2, t3, t4, t5, t6]:
+            mgr.dag.add_task(t)
+
+        mgr.save_manifest()
         return mgr
 
     @classmethod

@@ -53,6 +53,8 @@ Thumbs.db
 # ZARA Runtime & Ephemeral artifacts
 logs/voice/
 logs/screenshots/
+logs/blender_renders/
+modules/blender_scripts/
 checkpoints/checkpoint_*.json
 queue/improvement_proposals/prop-*.json
 queue/job_applications/draft_*.json

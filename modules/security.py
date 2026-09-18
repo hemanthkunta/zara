@@ -10,14 +10,13 @@ from pathlib import Path
 from typing import Tuple, Dict, Any, List
 from config.settings import SECURITY_SCOPE_FILE
 from core.observability import audit_logger
-
-class ScopeViolationError(Exception):
-    pass
+from modules.cyber_lab import CyberLabScope, CyberLabManager, ScopeViolationError
 
 class SecurityModule:
     def __init__(self, scope_file: Path = SECURITY_SCOPE_FILE):
         self.scope_file = Path(scope_file)
         self.scope_data = self._load_scope()
+        self.cyber_lab = CyberLabManager()
 
     def _load_scope(self) -> Dict[str, Any]:
         if not self.scope_file.exists():
