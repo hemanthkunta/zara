@@ -26,6 +26,7 @@ from tools.registry import ToolRegistry
 from tools.filesystem import ReadFileTool, WriteFileTool, PatchFileTool, ListDirTool
 from tools.terminal import TerminalExecutionTool, TestRunnerTool
 from tools.macos_control import MacOSNotificationTool, MacOSClipboardTool, MacOSScreenshotTool
+from tools.browser import BrowserTool
 from modules.memory import MemoryStore
 from modules.execution import ExecutionEngine
 from modules.coding import CodingModule
@@ -36,6 +37,7 @@ from modules.job_hunter import JobHunterModule
 from modules.orchestrator import TaskOrchestrator
 from modules.self_improvement import SelfImprovementEvaluator
 from modules.verification import VerificationEngine
+from modules.vision import VisionModule
 from core.recovery import RecoveryManager
 from core.observability import audit_logger
 
@@ -64,6 +66,7 @@ class ZaraEngine:
         self.verification = VerificationEngine(self.workspace_root)
         self.recovery = RecoveryManager()
         self.self_improvement = SelfImprovementEvaluator(self.memory)
+        self.vision = VisionModule(self.brain)
 
         # Initialize Tool Registry
         self.tools = ToolRegistry()
@@ -76,6 +79,7 @@ class ZaraEngine:
         self.tools.register(ListDirTool(self.workspace_root))
         self.tools.register(TerminalExecutionTool(self.workspace_root, use_docker=self.use_docker))
         self.tools.register(TestRunnerTool(self.workspace_root))
+        self.tools.register(BrowserTool())
         self.tools.register(MacOSNotificationTool())
         self.tools.register(MacOSClipboardTool())
         self.tools.register(MacOSScreenshotTool())

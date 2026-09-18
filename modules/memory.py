@@ -10,6 +10,8 @@ from config.settings import MEMORY_DIR, MEMORY_FILE
 from core.state import Reflection
 from core.observability import AuditLogger
 
+from modules.vector_memory import SemanticVectorStore
+
 EPISODES_FILE = MEMORY_DIR / "episodes.jsonl"
 PREFERENCES_FILE = MEMORY_DIR / "preferences.json"
 
@@ -17,6 +19,7 @@ class MemoryStore:
     def __init__(self, memory_path: Path = MEMORY_FILE):
         self.memory_path = Path(memory_path)
         self.memory_dir = self.memory_path.parent
+        self.vector_store = SemanticVectorStore(self.memory_dir / "vectors.db")
         self._ensure_exists()
 
     def _ensure_exists(self) -> None:
@@ -37,7 +40,7 @@ class MemoryStore:
             PREFERENCES_FILE.write_text(json.dumps(default_prefs, indent=2), encoding="utf-8")
 
     def append_reflection(self, reflection: Reflection) -> None:
-        """Append a completed task reflection to the persistent log with secrets scrubbed."""
+        """Append a completed task reflection to the persistent log and semantic vector store."""
         self._ensure_exists()
         # Scrub secrets
         reflection.approach = AuditLogger.scrub_secrets(reflection.approach)
@@ -58,6 +61,19 @@ class MemoryStore:
         }
         with open(EPISODES_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(episode) + "\n")
+
+        # Index into Semantic Vector Store
+        doc_content = f"Task: {reflection.task}\nApproach: {reflection.approach}\nResult: {reflection.result}\nLesson: {reflection.lesson}"
+        doc_id = f"refl_{reflection.timestamp}_{reflection.tag}"
+        self.vector_store.upsert_document(
+            doc_id=doc_id,
+            content=doc_content,
+            metadata={"tag": reflection.tag, "task": reflection.task, "timestamp": reflection.timestamp}
+        )
+
+    def search_semantic(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Dense semantic search across past lessons and episodes."""
+        return self.vector_store.search_semantic(query, limit=limit)
 
     def search_lessons(self, query: str, tag_filter: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
         """Search memory log for relevant past lessons by keywords and optional tag."""
