@@ -54,7 +54,10 @@ Thumbs.db
 logs/voice/
 logs/screenshots/
 logs/blender_renders/
+logs/events.jsonl
+logs/notifications.jsonl
 modules/blender_scripts/
 checkpoints/checkpoint_*.json
 queue/improvement_proposals/prop-*.json
 queue/job_applications/draft_*.json
+

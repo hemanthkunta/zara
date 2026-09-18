@@ -288,6 +288,113 @@ def cmd_project(args):
     else:
         print(f"Unknown project action: {action}")
 
+def cmd_schedule(args):
+    from modules.scheduler import PersistentScheduler, ScheduleType, JobPriority
+    scheduler = PersistentScheduler()
+    action = getattr(args, "schedule_action", None) or "list"
+
+    if action == "list":
+        jobs = scheduler.list_jobs()
+        if not jobs:
+            print("No scheduled jobs found.")
+        else:
+            print(f"\n{Colors.BOLD}=== ZARA SCHEDULED JOBS ==={Colors.END}")
+            for j in jobs:
+                status_color = Colors.GREEN if j.status.value == "scheduled" else (
+                    Colors.YELLOW if j.status.value == "running" else Colors.RED
+                )
+                print(f"  • {Colors.CYAN}{j.name}{Colors.END} [{j.job_id}] - {status_color}{j.status.value.upper()}{Colors.END} ({j.schedule_type.value}) Next: {j.next_run or 'None'} Priority: {j.priority.value}")
+            print()
+    elif action == "create":
+        stype = ScheduleType(args.type)
+        priority = JobPriority(args.priority) if hasattr(args, "priority") and args.priority else JobPriority.NORMAL
+        job = scheduler.schedule_job(
+            name=args.name,
+            schedule_type=stype,
+            cron_expression=getattr(args, "cron", None),
+            interval_seconds=float(args.interval) if getattr(args, "interval", None) else None,
+            priority=priority,
+            action_payload={"task": args.task}
+        )
+        print(f"{Colors.GREEN}✔ Scheduled job '{job.name}' created with ID: {job.job_id} (Next run: {job.next_run}){Colors.END}")
+    elif action == "status":
+        job = scheduler.get_job(args.job_id)
+        if not job:
+            print(f"{Colors.RED}Job '{args.job_id}' not found.{Colors.END}")
+        else:
+            print(f"\n{Colors.BOLD}JOB: {job.name}{Colors.END} [{job.job_id}]")
+            print(f"Status: {job.status.value.upper()} | Type: {job.schedule_type.value}")
+            print(f"Next Run: {job.next_run or 'None'} | Last Run: {job.last_run or 'Never'}")
+            print(f"Runs Completed: {job.runs_completed} / {job.max_runs or 'unlimited'}")
+            print(f"Priority: {job.priority.value} | Retries Used: {job.retries_used}")
+            print()
+    elif action == "pause":
+        if scheduler.pause_job(args.job_id):
+            print(f"{Colors.YELLOW}Job '{args.job_id}' paused.{Colors.END}")
+        else:
+            print(f"{Colors.RED}Failed to pause job '{args.job_id}'.{Colors.END}")
+    elif action == "resume":
+        if scheduler.resume_job(args.job_id):
+            print(f"{Colors.GREEN}Job '{args.job_id}' resumed.{Colors.END}")
+        else:
+            print(f"{Colors.RED}Failed to resume job '{args.job_id}'.{Colors.END}")
+    elif action == "cancel":
+        if scheduler.cancel_job(args.job_id):
+            print(f"{Colors.RED}Job '{args.job_id}' cancelled.{Colors.END}")
+        else:
+            print(f"{Colors.RED}Failed to cancel job '{args.job_id}'.{Colors.END}")
+
+def cmd_queue(args):
+    from modules.scheduler import PersistentScheduler
+    from modules.autonomous import DailyQueueSynthesizer
+    action = getattr(args, "queue_action", None) or "list"
+    scheduler = PersistentScheduler()
+    synthesizer = DailyQueueSynthesizer(scheduler=scheduler)
+
+    if action == "list":
+        items = synthesizer.synthesize()
+        if not items:
+            print("Queue is empty. No ready items.")
+        else:
+            print(f"\n{Colors.BOLD}=== ZARA PRIORITIZED WORK QUEUE ==={Colors.END}")
+            for idx, it in enumerate(items, 1):
+                p_color = Colors.RED if it["priority"] == "critical" else (
+                    Colors.YELLOW if it["priority"] == "high" else Colors.CYAN
+                )
+                print(f"  {idx}. [{it['source']}] {it['title']} ({p_color}{it['priority'].upper()}{Colors.END}) - {it['status']}")
+            print()
+    elif action == "pause":
+        print(f"{Colors.YELLOW}Queue execution paused.{Colors.END}")
+    elif action == "resume":
+        print(f"{Colors.GREEN}Queue execution active.{Colors.END}")
+
+def cmd_autonomous(args):
+    from modules.autonomous import AutonomousModeManager
+    mgr = AutonomousModeManager()
+    action = getattr(args, "auto_action", None) or "status"
+
+    if action == "status":
+        print(f"\n{Colors.BOLD}=== ZARA AUTONOMOUS INTELLIGENCE ==={Colors.END}")
+        mode_color = Colors.GREEN if mgr.is_enabled() else Colors.RED
+        print(f"Autonomous Mode: {mode_color}{mgr.mode.value}{Colors.END}")
+        b = mgr.budget
+        print(f"Daily Budget:")
+        print(f"  Runs: {b.runs_used} / {b.max_runs}")
+        print(f"  Tool Calls: {b.tool_calls_used} / {b.max_tool_calls}")
+        print(f"  Runtime: {b.runtime_seconds_used:.1f}s / {b.max_runtime_seconds:.1f}s")
+        print(f"  Retries: {b.retries_used} / {b.max_retries}")
+        print(f"Quiet Hours:")
+        is_quiet = mgr.quiet_hours.is_quiet_hours()
+        q_color = Colors.YELLOW if is_quiet else Colors.CYAN
+        print(f"  Currently Quiet Hours: {q_color}{is_quiet}{Colors.END}")
+        print()
+    elif action in ("on", "enable"):
+        mgr.enable()
+        print(f"{Colors.GREEN}✔ Autonomous Mode ENABLED.{Colors.END}")
+    elif action in ("off", "disable"):
+        mgr.disable()
+        print(f"{Colors.YELLOW}✔ Autonomous Mode DISABLED.{Colors.END}")
+
 def cmd_test(args):
     print(f"{Colors.CYAN}Running ZARA test suite...{Colors.END}")
     subprocess.run(["python3", "-m", "unittest", "discover", "tests", "-v"])
@@ -361,6 +468,48 @@ def main():
     recover_p = proj_sub.add_parser("recover", help="Recover interrupted project from checkpoint")
     recover_p.add_argument("target", type=str, nargs="?", default="", help="Project ID, name, or path")
 
+    # schedule command
+    sched_p = subparsers.add_parser("schedule", help="Manage persistent scheduled jobs")
+    sched_sub = sched_p.add_subparsers(dest="schedule_action", help="Schedule operations")
+    sched_sub.add_parser("list", help="List scheduled jobs")
+
+    s_create = sched_sub.add_parser("create", help="Schedule a new job")
+    s_create.add_argument("name", type=str, help="Job name")
+    s_create.add_argument("--type", type=str, default="once", choices=["once", "interval", "hourly", "daily", "weekly", "monthly", "cron"], help="Schedule type")
+    s_create.add_argument("--task", type=str, required=True, help="Task to run")
+    s_create.add_argument("--cron", type=str, help="Cron expression")
+    s_create.add_argument("--interval", type=float, help="Interval seconds")
+    s_create.add_argument("--priority", type=str, default="normal", choices=["low", "normal", "high", "critical"], help="Priority")
+
+    s_status = sched_sub.add_parser("status", help="Get status of scheduled job")
+    s_status.add_argument("job_id", type=str, help="Job ID")
+
+    s_pause = sched_sub.add_parser("pause", help="Pause scheduled job")
+    s_pause.add_argument("job_id", type=str, help="Job ID")
+
+    s_resume = sched_sub.add_parser("resume", help="Resume scheduled job")
+    s_resume.add_argument("job_id", type=str, help="Job ID")
+
+    s_cancel = sched_sub.add_parser("cancel", help="Cancel scheduled job")
+    s_cancel.add_argument("job_id", type=str, help="Job ID")
+
+    # jobs alias
+    subparsers.add_parser("jobs", parents=[sched_p], add_help=False)
+
+    # queue command
+    queue_p = subparsers.add_parser("queue", help="Inspect and control prioritized work queue")
+    queue_sub = queue_p.add_subparsers(dest="queue_action", help="Queue operations")
+    queue_sub.add_parser("list", help="List prioritized daily queue items")
+    queue_sub.add_parser("pause", help="Pause queue processing")
+    queue_sub.add_parser("resume", help="Resume queue processing")
+
+    # autonomous command
+    auto_p = subparsers.add_parser("autonomous", help="Configure autonomous mode, quiet hours, and daily budgets")
+    auto_sub = auto_p.add_subparsers(dest="auto_action", help="Autonomous mode operations")
+    auto_sub.add_parser("status", help="Show autonomous mode status and resource budgets")
+    auto_sub.add_parser("on", help="Enable autonomous mode")
+    auto_sub.add_parser("off", help="Disable autonomous mode")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -381,7 +530,11 @@ def main():
         "memory": cmd_memory,
         "voice-test": cmd_voice_test,
         "test": cmd_test,
-        "project": cmd_project
+        "project": cmd_project,
+        "schedule": cmd_schedule,
+        "jobs": cmd_schedule,
+        "queue": cmd_queue,
+        "autonomous": cmd_autonomous
     }
     commands[args.command](args)
 

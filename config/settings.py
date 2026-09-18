@@ -18,9 +18,12 @@ AUDIT_LOG_FILE = LOGS_DIR / "audit.jsonl"
 SYSTEM_LOG_FILE = LOGS_DIR / "zara.log"
 SCREENSHOTS_DIR = LOGS_DIR / "screenshots"
 PROJECTS_DIR = BASE_DIR / "projects"
+SCHEDULES_DIR = BASE_DIR / "schedules"
+SCHEDULES_FILE = CONFIG_DIR / "schedules.json"
+EVENTS_LOG_FILE = LOGS_DIR / "events.jsonl"
 
 # Ensure runtime directories exist
-for directory in (MEMORY_DIR, JOB_QUEUE_DIR, CONFIG_DIR, LOGS_DIR, CHECKPOINTS_DIR, SCREENSHOTS_DIR, PROJECTS_DIR):
+for directory in (MEMORY_DIR, JOB_QUEUE_DIR, CONFIG_DIR, LOGS_DIR, CHECKPOINTS_DIR, SCREENSHOTS_DIR, PROJECTS_DIR, SCHEDULES_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 # Risk Levels for Human Confirmation System
@@ -101,3 +104,13 @@ BLOCKED_COMMAND_PATTERNS = [
     r"\bmkfs\b",
     r":\(\)\{\s*:\|:&\s*\};:",  # fork bomb
 ]
+
+# Phase 10: Proactive Autonomy & Scheduling Parameters
+AUTONOMOUS_MODE = os.getenv("ZARA_AUTONOMOUS_MODE", "false").lower() in ("true", "1", "yes")
+QUIET_HOURS_START = os.getenv("ZARA_QUIET_HOURS_START", "23:00")
+QUIET_HOURS_END = os.getenv("ZARA_QUIET_HOURS_END", "07:00")
+MAX_AUTONOMOUS_RUNS_PER_DAY = int(os.getenv("ZARA_MAX_AUTONOMOUS_RUNS", "50"))
+MAX_AUTONOMOUS_TOOL_CALLS_PER_DAY = int(os.getenv("ZARA_MAX_AUTONOMOUS_TOOL_CALLS", "100"))
+MAX_AUTONOMOUS_RUNTIME_SECONDS_PER_DAY = int(os.getenv("ZARA_MAX_AUTONOMOUS_RUNTIME", "3600"))
+MAX_TRIGGER_CHAIN_DEPTH = int(os.getenv("ZARA_MAX_TRIGGER_CHAIN_DEPTH", "5"))
+TRIGGER_COOLDOWN_SECONDS = int(os.getenv("ZARA_TRIGGER_COOLDOWN", "60"))

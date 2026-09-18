@@ -91,6 +91,28 @@ from tools.blender_tools import (
 )
 from core.recovery import RecoveryManager
 from core.observability import audit_logger
+from modules.events import EventBus, Event, EventType, ConditionWatcher
+from modules.scheduler import (
+    Clock,
+    SystemClock,
+    MockClock,
+    PersistentScheduler,
+    JobQueue,
+    ScheduledJob,
+    ScheduleType,
+    JobStatus,
+    JobPriority,
+    MissedSchedulePolicy
+)
+from modules.notifications import NotificationManager, NotificationSeverity, Notification
+from modules.autonomous import (
+    AutonomousMode,
+    AutonomousModeManager,
+    AutonomousBudget,
+    QuietHoursManager,
+    DailyQueueSynthesizer,
+    ProactiveMaintenance
+)
 
 class ZaraEngine:
     def __init__(
@@ -107,7 +129,12 @@ class ZaraEngine:
         max_sources: Optional[int] = None,
         max_pages: Optional[int] = None,
         max_research_time_seconds: Optional[int] = None,
-        project_manager: Optional[Any] = None
+        project_manager: Optional[Any] = None,
+        clock: Optional[Clock] = None,
+        event_bus: Optional[EventBus] = None,
+        scheduler: Optional[PersistentScheduler] = None,
+        notifications: Optional[NotificationManager] = None,
+        autonomous: Optional[AutonomousModeManager] = None
     ):
         self.workspace_root = Path(workspace_root).resolve()
         self.use_docker = use_docker
@@ -140,6 +167,15 @@ class ZaraEngine:
         self.vision = VisionModule(self.brain)
         self.cyber_lab = CyberLabManager()
         self.blender = BlenderModule()
+
+        # Phase 10: Event Bus, Scheduler, Notifications & Autonomous Subsystems
+        self.clock = clock or SystemClock()
+        self.event_bus = event_bus or EventBus()
+        self.scheduler = scheduler or PersistentScheduler(clock=self.clock)
+        self.notifications = notifications or NotificationManager(voice_synthesizer=self.voice)
+        self.autonomous = autonomous or AutonomousModeManager()
+        self.daily_queue = DailyQueueSynthesizer(scheduler=self.scheduler, project_manager=self.project_manager)
+        self.maintenance = ProactiveMaintenance(project_manager=self.project_manager, event_bus=self.event_bus)
 
         # Initialize Tool Registry
         self.tools = ToolRegistry()
@@ -234,9 +270,37 @@ class ZaraEngine:
             except Exception:
                 pass
 
+        # Publish to Phase 10 Event Bus
+        if hasattr(self, "event_bus") and self.event_bus:
+            try:
+                ev_type = EventType.TASK_COMPLETED if event == "task_completed" else (
+                    EventType.TASK_FAILED if event == "task_failed" else (
+                        EventType.APPROVAL_PENDING if "approval" in event else EventType.CUSTOM
+                    )
+                )
+                self.event_bus.publish(Event(
+                    type=ev_type,
+                    source="engine",
+                    task_id=getattr(context, "task", None),
+                    payload={"event": event, "tool": tool, "status": status, **(extra or {})}
+                ))
+            except Exception:
+                pass
+
     def set_project_manager(self, pm) -> None:
         """Set persistent project manager for workspace-bound operations."""
         self.project_manager = pm
+        if hasattr(self, "daily_queue"):
+            self.daily_queue.project_manager = pm
+        if hasattr(self, "maintenance"):
+            self.maintenance.project_manager = pm
+
+    def set_clock(self, clock: Clock) -> None:
+        """Inject mock or custom clock across engine and subsystems."""
+        self.clock = clock
+        if hasattr(self, "scheduler") and self.scheduler:
+            self.scheduler.clock = clock
+
     def perceive(self, task: str, tag: str = "dev") -> TaskContext:
         """Read task, query memory for prior lessons, and inspect repo state."""
         self.voice.speak(f"Perceiving task: {task[:60]}")
@@ -1199,3 +1263,164 @@ class ZaraEngine:
     def _notify_step(self, stage: str, step: PlanStep) -> None:
         if self.on_step_update:
             self.on_step_update(stage, step)
+
+    def execute_task(self, task: str, tag: str = "dev", steps: Optional[List[PlanStep]] = None) -> Dict[str, Any]:
+        """Convenience alias for run_task."""
+        return self.run_task(task=task, tag=tag, steps=steps)
+
+    def autonomous_tick(self, clock_time: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Heartbeat for proactive autonomy: processes due scheduled tasks,
+        maintains persistent queues, verifies security target scope,
+        gates critical actions behind human confirmation tickets,
+        and strictly enforces resource budgets.
+        """
+        if clock_time is not None and hasattr(self.clock, "set_time"):
+            import datetime as _dt_mod
+            new_dt = _dt_mod.datetime.fromtimestamp(clock_time, tz=_dt_mod.timezone.utc)
+            self.clock.set_time(new_dt)
+
+        # 1. Mode Gate: OFF vs ON
+        if not self.autonomous.is_enabled():
+            return {
+                "status": "PAUSED_AUTONOMOUS_OFF",
+                "reason": "Autonomous execution is disabled (AUTONOMOUS MODE: OFF).",
+                "executed_jobs": [],
+                "budget": self.autonomous.budget.to_dict()
+            }
+
+        # 2. Daily Resource Budget Gate
+        can_run, budget_reason = self.autonomous.can_execute_autonomously()
+        if not can_run:
+            self.notifications.notify(
+                title="Autonomous Mode Paused",
+                message=f"Autonomous execution paused: {budget_reason}",
+                severity=NotificationSeverity.WARNING
+            )
+            return {
+                "status": "PAUSED_BY_BUDGET",
+                "reason": budget_reason,
+                "executed_jobs": [],
+                "budget": self.autonomous.budget.to_dict()
+            }
+
+        now_dt = self.clock.now()
+        is_quiet = self.autonomous.quiet_hours.is_quiet_hours(now_dt)
+        if not is_quiet:
+            self.notifications.flush_quiet_hours_queue()
+
+        # 3. Startup Recovery for Missed Schedules
+        self.scheduler.recover_missed_schedules()
+
+        due_jobs = self.scheduler.get_due_jobs()
+        executed_jobs = []
+
+        for job in due_jobs:
+            # Quiet Hours Policy: Defer non-critical jobs during quiet hours
+            if is_quiet and job.priority != JobPriority.CRITICAL:
+                continue
+
+            can_run, budget_reason = self.autonomous.can_execute_autonomously()
+            if not can_run:
+                break
+
+            # Safety Gate 1: Cybersecurity Target Scope Verification
+            if job.capability == "cybersecurity" or any(kw in (job.name + " " + str(job.action_payload)).lower() for kw in ["scan", "exploit", "audit", "nmap", "sql"]):
+                target = job.action_payload.get("target") or job.metadata.get("target")
+                if target:
+                    is_auth, target_obj, reason = self.cyber_lab.scope.verify_target(target)
+                    if not is_auth:
+                        self.scheduler.mark_job_failed(job.job_id, error=f"ScopeViolation: {reason}")
+                        self.notifications.notify(
+                            title="Cybersecurity Scope Violation",
+                            message=f"Job {job.job_id} cancelled: {reason}",
+                            severity=NotificationSeverity.CRITICAL
+                        )
+                        continue
+
+            # Safety Gate 2: Human Confirmation Ticket Verification
+            if job.metadata.get("requires_approval") or job.action_payload.get("requires_approval") or job.priority == JobPriority.CRITICAL:
+                if not job.metadata.get("approved", False):
+                    job.status = JobStatus.WAITING_APPROVAL
+                    self.scheduler.save()
+                    ticket = {
+                        "ticket_id": f"ticket_{job.job_id}",
+                        "job_id": job.job_id,
+                        "title": job.name,
+                        "action": job.action_payload.get("task") or job.name,
+                        "status": "PENDING"
+                    }
+                    if self.project_manager:
+                        self.project_manager.request_approval(ticket)
+                    self.notifications.notify(
+                        title="Scheduled Job Awaiting Approval",
+                        message=f"Job '{job.name}' ({job.job_id}) requires human confirmation.",
+                        severity=NotificationSeverity.WARNING,
+                        is_quiet_hours=is_quiet
+                    )
+                    continue
+
+            # Execute Scheduled Job
+            self.scheduler.mark_job_running(job.job_id)
+            self.event_bus.publish(Event(
+                type=EventType.SCHEDULED_JOB_TRIGGERED,
+                source="scheduler",
+                payload={"job_id": job.job_id, "name": job.name}
+            ))
+
+            task_str = job.action_payload.get("task") or job.name
+            custom_steps = job.action_payload.get("steps")
+            start_t = time.time()
+            result = self.execute_task(task_str, steps=custom_steps)
+            duration = time.time() - start_t
+
+            self.autonomous.budget.record(
+                runs=1,
+                tool_calls=result.get("steps_total", 1),
+                runtime_seconds=duration,
+                retries=result.get("total_retries", 0)
+            )
+            self.autonomous.save()
+
+            if result.get("status") == "COMPLETED":
+                self.scheduler.mark_job_completed(job.job_id)
+                self.event_bus.publish(Event(
+                    type=EventType.TASK_COMPLETED,
+                    source="scheduler",
+                    payload={"job_id": job.job_id, "status": "COMPLETED"}
+                ))
+                self.notifications.notify(
+                    title="Scheduled Job Succeeded",
+                    message=f"Job '{job.name}' completed successfully.",
+                    severity=NotificationSeverity.INFO,
+                    is_quiet_hours=is_quiet
+                )
+                executed_jobs.append({"job_id": job.job_id, "status": "COMPLETED", "result": result})
+            else:
+                self.scheduler.mark_job_failed(job.job_id, error=result.get("blocker_reason") or "Failed")
+                self.event_bus.publish(Event(
+                    type=EventType.TASK_FAILED,
+                    source="scheduler",
+                    payload={"job_id": job.job_id, "reason": result.get("blocker_reason")}
+                ))
+                self.notifications.notify(
+                    title="Scheduled Job Failed",
+                    message=f"Job '{job.name}' failed: {result.get('blocker_reason')}",
+                    severity=NotificationSeverity.WARNING,
+                    is_quiet_hours=is_quiet
+                )
+                executed_jobs.append({"job_id": job.job_id, "status": "FAILED", "result": result})
+
+        self.event_bus.publish(Event(
+            type=EventType.AUTONOMOUS_TICK,
+            source="engine",
+            payload={"executed_count": len(executed_jobs), "due_count": len(due_jobs)}
+        ))
+
+        return {
+            "status": "OK",
+            "executed_jobs": executed_jobs,
+            "due_jobs_count": len(due_jobs),
+            "budget": self.autonomous.budget.to_dict()
+        }
+

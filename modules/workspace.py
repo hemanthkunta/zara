@@ -326,8 +326,8 @@ class ArtifactRegistry:
     def register(
         self,
         rel_or_abs_path: str,
-        task_id: str,
-        project_id: str,
+        task_id: str = "general",
+        project_id: str = "default",
         artifact_type: str = "code",
         metadata: Optional[Dict[str, Any]] = None
     ) -> ArtifactRecord:
@@ -379,6 +379,18 @@ class ArtifactRegistry:
         self.artifacts[art_id] = record
         self.save()
         return record
+
+    def register_artifact(
+        self,
+        rel_or_abs_path: str,
+        task_id: str = "general",
+        project_id: str = "default",
+        artifact_type: str = "code",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> ArtifactRecord:
+        """Alias for register."""
+        return self.register(rel_or_abs_path, task_id, project_id, artifact_type, metadata)
+
 
     def verify(self, artifact_id_or_path: str) -> Tuple[bool, str, str]:
         """
@@ -666,6 +678,33 @@ class ProjectManager:
 
         if self.project_file.exists():
             self._load_all()
+
+    def create_project(
+        self,
+        name: str,
+        description: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+        budget: Optional[ProjectBudget] = None,
+        project_type: ProjectType = ProjectType.GENERAL
+    ) -> None:
+        """Create and persist a project manifest on this manager instance."""
+        proj_id = f"proj-{uuid.uuid4().hex[:8]}"
+        self.project = PersistentProject(
+            project_id=proj_id,
+            name=name,
+            description=description,
+            workspace_path=str(self.workspace_path),
+            status=ProjectStatus.CREATED,
+            project_type=project_type,
+            metadata=metadata or {},
+            budget=budget or ProjectBudget(),
+            created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            updated_at=datetime.datetime.now(datetime.timezone.utc).isoformat()
+        )
+        self.dag = PersistentDAG(self.tasks_file)
+        self.artifacts = ArtifactRegistry(self.artifacts_file, self.workspace_path)
+        self.journal = ProjectJournal(self.journal_file)
+        self.save_manifest()
 
     @classmethod
     def create(
