@@ -548,6 +548,87 @@ def cmd_test(args):
     print(f"{Colors.CYAN}Running ZARA test suite...{Colors.END}")
     subprocess.run(["python3", "-m", "unittest", "discover", "tests", "-v"])
 
+def cmd_world(args):
+    """Inspect and manage ZARA Unified Multimodal World Model."""
+    from modules.world_model import WorldModel, Modality, TemporalStatus, WorldState
+    from modules.workspace import ProjectManager, discover_projects
+    from config.settings import PROJECTS_DIR
+
+    action = getattr(args, "world_action", None) or "status"
+    target = getattr(args, "project", None) or getattr(args, "target", None)
+
+    workspace_path = Path.cwd()
+    if target:
+        cand = Path(target).resolve()
+        if (cand / ".zara").exists():
+            workspace_path = cand
+        elif (PROJECTS_DIR / target / ".zara").exists():
+            workspace_path = PROJECTS_DIR / target
+
+    pm = None
+    if (workspace_path / ".zara" / "project.json").exists():
+        try:
+            pm = ProjectManager.load(workspace_path)
+        except Exception:
+            pass
+
+    wm = WorldModel(workspace_root=str(workspace_path))
+    if pm and hasattr(pm, "load_world_state"):
+        saved = pm.load_world_state()
+        if saved:
+            wm.current_state = WorldState.from_dict(saved)
+
+    if action in ("status", None):
+        print(f"\n{Colors.BOLD}=== ZARA WORLD STATE ==={Colors.END}")
+        active_app = wm.get_active_app() or "Desktop / None"
+        active_win = wm.get_active_window() or "None"
+        active_proj = wm.get_active_project() or (pm.project.name if pm and pm.project else "None")
+        active_task = wm.get_active_task() or "None"
+        term_proc = (wm.current_state.terminal_state or {}).get("command") or "None"
+        last_obs = wm.current_state.timestamp or "Never"
+        conf = wm.current_state.confidence
+        conf_str = f"{conf:.2f}" if isinstance(conf, float) else str(conf)
+
+        print(f"Active App:        {Colors.CYAN}{active_app}{Colors.END}")
+        print(f"Active Window:     {Colors.CYAN}{active_win}{Colors.END}")
+        print(f"Project:           {Colors.GREEN}{active_proj}{Colors.END}")
+        print(f"Task:              {Colors.YELLOW}{active_task}{Colors.END}")
+        print(f"Terminal:          {term_proc}")
+        print(f"Entities Count:    {len(wm.entities)}")
+        print(f"Relations Count:   {len(wm.relationships)}")
+        print(f"Last Observation:  {last_obs}")
+        print(f"Confidence:        {Colors.BOLD}{conf_str}{Colors.END}")
+        print(f"\nModality Freshness:")
+        for m in [Modality.SCREEN, Modality.FILESYSTEM, Modality.BROWSER, Modality.BLENDER, Modality.CYBER, Modality.TERMINAL]:
+            staleness = wm.get_staleness(m).value.upper()
+            color = Colors.GREEN if staleness == "CURRENT" else (Colors.YELLOW if staleness == "RECENT" else Colors.RED)
+            print(f"  • {m.value.capitalize():<12}: {color}{staleness}{Colors.END}")
+        print()
+
+    elif action == "snapshot":
+        snap = wm.create_snapshot(active_project=pm.project.project_id if pm and pm.project else None)
+        if pm and hasattr(pm, "save_world_snapshot"):
+            snap_file = pm.save_world_snapshot(snap)
+            print(f"{Colors.GREEN}World snapshot created and saved: {snap.snapshot_id} -> {snap_file.name}{Colors.END}")
+        else:
+            print(f"{Colors.GREEN}World snapshot created in memory: {snap.snapshot_id}{Colors.END}")
+
+    elif action == "diff":
+        diff_res = wm.get_world_diff()
+        print(f"\n{Colors.BOLD}=== ZARA WORLD STATE DIFF ==={Colors.END}")
+        if not diff_res.get("has_changes"):
+            print("No changes between previous and current world states.")
+        else:
+            print(f"Total Changes: {diff_res.get('changes_count')}")
+            for k, v in diff_res.get("changes", {}).items():
+                print(f"  • {k}: {v.get('previous')} -> {v.get('current')}")
+        print()
+
+    elif action == "refresh":
+        print(f"{Colors.CYAN}Refreshing world state modalities...{Colors.END}")
+        wm.refresh()
+        print(f"{Colors.GREEN}World state refreshed.{Colors.END}")
+
 def main():
     parser = argparse.ArgumentParser(description="ZARA Autonomous Agent CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -675,6 +756,18 @@ def main():
     dec_p = subparsers.add_parser("decisions", help="View persistent operational decision records")
     dec_p.add_argument("project", type=str, nargs="?", default="", help="Optional project name, ID, or path")
 
+    # world command
+    world_p = subparsers.add_parser("world", help="Inspect, diff, snapshot, and refresh multimodal world model")
+    world_sub = world_p.add_subparsers(dest="world_action", help="World model operations")
+    w_status = world_sub.add_parser("status", help="Show active world state, app, window, and freshness")
+    w_status.add_argument("project", type=str, nargs="?", default="", help="Optional project name, ID, or path")
+    w_snapshot = world_sub.add_parser("snapshot", help="Create and persist a world snapshot")
+    w_snapshot.add_argument("project", type=str, nargs="?", default="", help="Optional project name, ID, or path")
+    w_diff = world_sub.add_parser("diff", help="Show differences between previous and current world states")
+    w_diff.add_argument("project", type=str, nargs="?", default="", help="Optional project name, ID, or path")
+    w_refresh = world_sub.add_parser("refresh", help="Force refresh stale modalities")
+    w_refresh.add_argument("project", type=str, nargs="?", default="", help="Optional project name, ID, or path")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -701,7 +794,8 @@ def main():
         "queue": cmd_queue,
         "autonomous": cmd_autonomous,
         "plan": cmd_plan,
-        "decisions": cmd_decisions
+        "decisions": cmd_decisions,
+        "world": cmd_world
     }
     commands[args.command](args)
 

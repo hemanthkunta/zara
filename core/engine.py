@@ -126,6 +126,7 @@ from modules.planning import (
 from modules.replanning import AdaptiveReplanner, PlanVersion, PlanningFailureType
 from modules.context import ContextManager, ContextCompactor, CompactSummary
 from modules.workspace import PersistentTask
+from modules.world_model import WorldModel, Modality, Observation, TemporalStatus, WorldState
 
 class ZaraEngine:
     def __init__(
@@ -147,7 +148,8 @@ class ZaraEngine:
         event_bus: Optional[EventBus] = None,
         scheduler: Optional[PersistentScheduler] = None,
         notifications: Optional[NotificationManager] = None,
-        autonomous: Optional[AutonomousModeManager] = None
+        autonomous: Optional[AutonomousModeManager] = None,
+        world_model: Optional[WorldModel] = None
     ):
         self.workspace_root = Path(workspace_root).resolve()
         self.use_docker = use_docker
@@ -194,6 +196,9 @@ class ZaraEngine:
         self.decision_registry = DecisionRegistry()
         self.context_manager = ContextManager(project_id="default")
         self.adaptive_replanner = AdaptiveReplanner(project_id="default")
+
+        # Phase 12: Multimodal Perception & Unified World Model
+        self.world_model = world_model or WorldModel(workspace_root=str(self.workspace_root), event_bus=self.event_bus)
 
         # Initialize Tool Registry
         self.tools = ToolRegistry()
@@ -324,6 +329,22 @@ class ZaraEngine:
             self.daily_queue.project_manager = pm
         if hasattr(self, "maintenance"):
             self.maintenance.project_manager = pm
+        if pm and hasattr(self, "world_model") and self.world_model:
+            if hasattr(pm, "load_world_state"):
+                saved_world = pm.load_world_state()
+                if saved_world:
+                    try:
+                        self.world_model.current_state = WorldState.from_dict(saved_world)
+                    except Exception:
+                        pass
+            if getattr(pm, "project", None):
+                self.world_model.observe(Observation(
+                    modality=Modality.PROJECT,
+                    source="workspace_set_project",
+                    payload={"project_id": pm.project.project_id, "name": pm.project.name, "status": pm.project.status.value},
+                    project_id=pm.project.project_id,
+                    trusted=True
+                ))
 
     # -------------------------------------------------------------
     # Phase 11: Goal Understanding, Planning & Adaptive Replanning
@@ -340,7 +361,8 @@ class ZaraEngine:
     ) -> Tuple[List[PersistentTask], PlanValidationResult, PlanCost]:
         """Generate hierarchical plan, validate quality and safety, estimate cost, and persist."""
         proj_id = project_id or (self.project_manager.project.project_id if self.project_manager and self.project_manager.project else "proj-default")
-        tasks = custom_tasks if custom_tasks is not None else HierarchicalPlanner.create_hierarchical_plan(goal, proj_id)
+        world_state = self.world_model.current_state if hasattr(self, "world_model") and self.world_model else None
+        tasks = custom_tasks if custom_tasks is not None else HierarchicalPlanner.create_hierarchical_plan(goal, proj_id, world_state=world_state)
         budget = self.project_manager.project.budget if self.project_manager and self.project_manager.project else None
 
         # Scope validation for cybersecurity
@@ -489,6 +511,17 @@ class ZaraEngine:
         )
         self._record_event(context, "task_started", extra={"task": task, "tag": tag})
         audit_logger.log_event("LOOP_PERCEIVE", action="perceive", extra={"task": task, "tag": tag})
+
+        if hasattr(self, "world_model") and self.world_model:
+            proj_id = self.project_manager.project.project_id if self.project_manager and getattr(self.project_manager, "project", None) else None
+            self.world_model.observe(Observation(
+                modality=Modality.TASK,
+                source="engine_perceive",
+                payload={"name": task, "status": "ACTIVE"},
+                project_id=proj_id,
+                trusted=True
+            ))
+
         return context
 
     # 2. PLAN
@@ -729,6 +762,21 @@ class ZaraEngine:
                                 command=cmd
                             )
                         else:
+                            # Pre-action Staleness Refresh Check
+                            if hasattr(self, "world_model") and self.world_model:
+                                if tool_name in ("mouse_click", "mouse_move", "keyboard_type"):
+                                    if self.world_model.get_staleness(Modality.SCREEN) in (TemporalStatus.STALE, TemporalStatus.UNKNOWN):
+                                        ss_tool = self.tools.get("screenshot_capture")
+                                        if ss_tool:
+                                            ss_res = ss_tool.execute()
+                                            if ss_res.success and ss_res.data and isinstance(ss_res.data, dict):
+                                                self.world_model.observe(Observation(
+                                                    modality=Modality.SCREEN,
+                                                    source="refresh_probe",
+                                                    payload=ss_res.data,
+                                                    trusted=False
+                                                ))
+
                             tool_res = self.tools.execute(tool_name, args, task_id=context.task[:30])
                             raw_return_val = tool_res.data
 
@@ -815,6 +863,87 @@ class ZaraEngine:
             "error": result.stderr if not result.success else None,
             "timestamp": datetime.now().isoformat()
         }
+
+        # Phase 12: Ingest observation into Unified World Model
+        if hasattr(self, "world_model") and self.world_model:
+            try:
+                proj_id = self.project_manager.project.project_id if self.project_manager and getattr(self.project_manager, "project", None) else None
+                task_id = f"step_{step.id}"
+                args_dict = dict(step.arguments or step.payload or {})
+
+                modality = Modality.EVENT
+                obs_payload = dict(args_dict)
+                trusted = False
+                source = f"tool_{tool_ident}"
+
+                if tool_ident == "terminal_execute" or step.action_type in (ActionType.EXECUTE, ActionType.TEST):
+                    modality = Modality.TERMINAL
+                    obs_payload.update({
+                        "command": args_dict.get("command") or step.target,
+                        "exit_code": result.exit_code,
+                        "stdout": result.stdout,
+                        "status": "COMPLETED" if result.success else "FAILED"
+                    })
+                elif tool_ident in ("screenshot_capture", "mouse_click", "mouse_move", "keyboard_type", "active_window"):
+                    modality = Modality.SCREEN
+                    if getattr(context, "current_gui_state", None):
+                        obs_payload.update(context.current_gui_state.to_dict())
+                elif tool_ident in ("web_search", "browser_open", "browser_scrape", "extract_content", "follow_link"):
+                    modality = Modality.BROWSER
+                    obs_payload.update({
+                        "url": args_dict.get("url"),
+                        "query": args_dict.get("query"),
+                        "result_summary": result.stdout[:200]
+                    })
+                elif tool_ident in ("write_file", "patch_file", "read_file") or step.action_type == ActionType.CODE:
+                    modality = Modality.FILESYSTEM
+                    obs_payload.update({
+                        "path": args_dict.get("path") or args_dict.get("file_path") or step.target,
+                        "state": "MODIFIED" if result.success else "ERROR"
+                    })
+                elif "blender" in tool_ident:
+                    modality = Modality.BLENDER
+                    obs_payload.update({
+                        "tool": tool_ident,
+                        "render_status": "COMPLETED" if "render" in tool_ident and result.success else "PENDING"
+                    })
+                elif "cyber" in tool_ident or step.action_type == ActionType.SECURITY_AUDIT:
+                    modality = Modality.CYBER
+                    obs_payload.update({
+                        "target": args_dict.get("target") or step.target,
+                        "authorized": False  # Strictly preserve authorization boundary
+                    })
+
+                prev_state_dict = self.world_model.current_state.to_dict() if self.world_model.current_state else {}
+                self.world_model.observe(Observation(
+                    modality=modality,
+                    source=source,
+                    payload=obs_payload,
+                    project_id=proj_id,
+                    task_id=task_id,
+                    confidence=1.0 if result.success else 0.5,
+                    trusted=trusted
+                ))
+
+                diff = self.world_model.diff(WorldState.from_dict(prev_state_dict), self.world_model.current_state)
+                if diff.get("has_changes") and hasattr(self, "event_bus") and self.event_bus:
+                    self.event_bus.publish(Event(
+                        type=EventType.WORLD_STATE_CHANGED,
+                        source="world_model",
+                        project_id=proj_id,
+                        task_id=task_id,
+                        payload=diff
+                    ))
+                    if "active_app" in diff.get("changes", {}):
+                        self.event_bus.publish(Event(
+                            type=EventType.APP_CHANGED,
+                            source="world_model",
+                            project_id=proj_id,
+                            task_id=task_id,
+                            payload=diff["changes"]["active_app"]
+                        ))
+            except Exception as e:
+                audit_logger.log_event("world_model_observation_error", {"error": str(e)})
 
         if not result.success:
             err_lower = (result.stderr or "").lower()
@@ -1401,6 +1530,13 @@ class ZaraEngine:
 
         # 7. PERSIST
         self.persist(reflection)
+
+        # Phase 12: Persist normalized world state to project workspace if active
+        if self.project_manager and hasattr(self.project_manager, "save_world_state") and hasattr(self, "world_model") and self.world_model:
+            try:
+                self.project_manager.save_world_state(self.world_model.current_state.to_dict())
+            except Exception:
+                pass
 
         # Self-improvement evaluation
         self.self_improvement.evaluate_task(context)

@@ -301,8 +301,9 @@ class HierarchicalPlanner:
         cls,
         goal: Goal,
         project_id: str,
+        world_state: Optional[Any] = None,
     ) -> List[PersistentTask]:
-        """Generate hierarchical DAG tasks tailored to the Goal domain."""
+        """Generate hierarchical DAG tasks tailored to the Goal domain, informed by World Model state."""
         tasks: List[PersistentTask] = []
         domain = goal.domain
 

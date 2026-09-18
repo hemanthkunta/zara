@@ -667,9 +667,11 @@ class ProjectManager:
         self.planning_file = self.zara_dir / "planning.json"
         self.decisions_file = self.zara_dir / "decisions.jsonl"
         self.summaries_file = self.zara_dir / "summaries.json"
+        self.world_state_file = self.zara_dir / "world_state.json"
+        self.world_snapshots_dir = self.zara_dir / "world_snapshots"
 
         # Ensure directory structure
-        for d in (self.zara_dir, self.checkpoints_dir, self.snapshots_dir):
+        for d in (self.zara_dir, self.checkpoints_dir, self.snapshots_dir, self.world_snapshots_dir):
             d.mkdir(parents=True, exist_ok=True)
 
         self.project: Optional[PersistentProject] = None
@@ -997,6 +999,46 @@ class ProjectManager:
             return data if isinstance(data, list) else []
         except Exception:
             return []
+
+    # -------------------------------------------------------------
+    # World Model State & Snapshot Persistence
+    # -------------------------------------------------------------
+    def save_world_state(self, state_dict: Dict[str, Any]) -> None:
+        """Atomically persist normalized world state to .zara/world_state.json."""
+        _atomic_write_json(self.world_state_file, state_dict)
+
+    def load_world_state(self) -> Optional[Dict[str, Any]]:
+        """Load persisted world state from .zara/world_state.json if available."""
+        if not self.world_state_file.exists():
+            return None
+        try:
+            return json.loads(self.world_state_file.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def save_world_snapshot(self, snapshot: Any) -> Path:
+        """Atomically persist a WorldSnapshot into .zara/world_snapshots/{snapshot_id}.json."""
+        snap_dict = snapshot.to_dict() if hasattr(snapshot, "to_dict") else dict(snapshot)
+        snap_id = snap_dict.get("snapshot_id", f"snap_{uuid.uuid4().hex[:8]}")
+        snap_file = self.world_snapshots_dir / f"{snap_id}.json"
+        _atomic_write_json(snap_file, snap_dict)
+        return snap_file
+
+    def list_world_snapshots(self) -> List[str]:
+        """List all saved world snapshot IDs."""
+        if not self.world_snapshots_dir.exists():
+            return []
+        return sorted([f.stem for f in self.world_snapshots_dir.glob("*.json")])
+
+    def load_world_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        """Load a specific WorldSnapshot by ID from .zara/world_snapshots/."""
+        snap_file = self.world_snapshots_dir / f"{snapshot_id}.json"
+        if not snap_file.exists():
+            return None
+        try:
+            return json.loads(snap_file.read_text(encoding="utf-8"))
+        except Exception:
+            return None
 
     # -------------------------------------------------------------
     # Task Management & DAG Integration

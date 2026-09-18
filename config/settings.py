@@ -123,3 +123,17 @@ PLANNING_DIR = LOGS_DIR / "planning"
 PLANNING_DIR.mkdir(parents=True, exist_ok=True)
 DECISIONS_LOG_FILE = LOGS_DIR / "decisions.jsonl"
 MAX_CONTEXT_HISTORY_TOKENS = int(os.getenv("ZARA_MAX_CONTEXT_HISTORY_TOKENS", "4000"))
+
+# Phase 12: Multimodal Perception & Unified World Model
+WORLD_TTL_ACTIVE_APP = int(os.getenv("ZARA_WORLD_TTL_ACTIVE_APP", "10"))
+WORLD_TTL_SCREEN = int(os.getenv("ZARA_WORLD_TTL_SCREEN", "15"))
+WORLD_TTL_TERMINAL = int(os.getenv("ZARA_WORLD_TTL_TERMINAL", "30"))
+WORLD_TTL_FILESYSTEM = int(os.getenv("ZARA_WORLD_TTL_FILESYSTEM", "60"))
+WORLD_TTL_BROWSER = int(os.getenv("ZARA_WORLD_TTL_BROWSER", "120"))
+WORLD_TTL_BLENDER = int(os.getenv("ZARA_WORLD_TTL_BLENDER", "60"))
+WORLD_TTL_CYBER = int(os.getenv("ZARA_WORLD_TTL_CYBER", "60"))
+WORLD_TTL_PROJECT = int(os.getenv("ZARA_WORLD_TTL_PROJECT", "30"))
+WORLD_DIR = LOGS_DIR / "world"
+WORLD_DIR.mkdir(parents=True, exist_ok=True)
+WORLD_SNAPSHOTS_DIR = LOGS_DIR / "world_snapshots"
+WORLD_SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)

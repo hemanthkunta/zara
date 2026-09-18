@@ -41,6 +41,11 @@ class EventType(str, Enum):
     SCHEDULED_JOB_TRIGGERED = "scheduled_job_triggered"
     MAINTENANCE_REQUIRED = "maintenance_required"
     CHAIN_BLOCKED = "autonomous_chain_blocked"
+    SCREEN_CHANGED = "screen_changed"
+    APP_CHANGED = "app_changed"
+    BLENDER_CHANGED = "blender_changed"
+    CYBER_STATE_CHANGED = "cyber_state_changed"
+    WORLD_STATE_CHANGED = "world_state_changed"
     CUSTOM = "custom"
 
 
