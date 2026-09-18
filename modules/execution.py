@@ -104,6 +104,8 @@ class ExecutionEngine:
         # Strip sensitive credentials from child process environment if not strictly needed
         for secret_var in ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "SLACK_TOKEN"]:
             safe_env.pop(secret_var, None)
+        # Prevent stale bytecode caches during rapid code patches
+        safe_env["PYTHONDONTWRITEBYTECODE"] = "1"
 
         if self.use_docker:
             result = self._execute_in_docker(command, timeout)

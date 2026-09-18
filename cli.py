@@ -151,6 +151,46 @@ def cmd_memory(args):
             print(e)
             print("-" * 50)
 
+def cmd_voice(args):
+    print_banner()
+    print(f"{Colors.CYAN}{Colors.BOLD}Starting ZARA Voice Mode.{Colors.END}")
+    print(f"{Colors.GREEN}Say 'ZARA, <command>' or type input. Say 'Stop' or 'Cancel' to abort.{Colors.END}\n")
+
+    from modules.voice_controller import VoiceInteractionController
+    from modules.voice import MockSTTProvider, MockTTSProvider, NativeMacOSTTSProvider, LocalSTTProvider
+
+    engine = ZaraEngine(
+        use_docker=args.docker,
+        enable_voice=not args.no_tts,
+        on_step_update=step_callback
+    )
+
+    stt = MockSTTProvider() if args.mock else (LocalSTTProvider() if LocalSTTProvider().is_available() else MockSTTProvider())
+    tts = MockTTSProvider() if (args.mock or args.no_tts) else NativeMacOSTTSProvider()
+    controller = VoiceInteractionController(
+        engine=engine,
+        stt_provider=stt,
+        tts_provider=tts,
+        wake_word=args.wake_word,
+        require_wake_word=args.require_wake
+    )
+
+    print(f"Voice interface active. State: {controller.current_state.value}")
+    while True:
+        try:
+            user_input = input(f"{Colors.BOLD}Voice Input (spoken or simulated) > {Colors.END}").strip()
+            if not user_input:
+                continue
+            if user_input.lower() in ("exit", "quit", "q"):
+                print(f"{Colors.CYAN}ZARA: Exiting voice mode.{Colors.END}")
+                break
+
+            result = controller.process_utterance(user_input)
+            print(f"{Colors.CYAN}{Colors.BOLD}ZARA (Spoken) >{Colors.END} {result.get('verbal_summary') or result.get('response')}\n")
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{Colors.CYAN}Voice mode exited.{Colors.END}")
+            break
+
 def cmd_voice_test(args):
     print(f"{Colors.CYAN}Testing ZARA Voice Output (Samantha / Female Voice)...{Colors.END}")
     voice = VoiceSynthesizer(enabled=True)
@@ -176,6 +216,14 @@ def main():
     chat_p = subparsers.add_parser("chat", help="Interactive conversational session with ZARA")
     chat_p.add_argument("--docker", action="store_true", help="Run in Docker sandbox")
     chat_p.add_argument("--no-voice", action="store_true", help="Disable TTS voice")
+
+    # voice command
+    voice_p = subparsers.add_parser("voice", help="Interactive voice mode with ZARA")
+    voice_p.add_argument("--docker", action="store_true", help="Run in Docker sandbox")
+    voice_p.add_argument("--no-tts", action="store_true", help="Disable audio speech output")
+    voice_p.add_argument("--mock", action="store_true", help="Use mock STT/TTS providers")
+    voice_p.add_argument("--wake-word", type=str, default="ZARA", help="Custom wake word")
+    voice_p.add_argument("--require-wake", action="store_true", help="Strictly require wake word to activate")
 
     # tools command
     subparsers.add_parser("tools", help="List all registered tools and permission levels")
@@ -209,6 +257,7 @@ def main():
     commands = {
         "run": cmd_run,
         "chat": cmd_chat,
+        "voice": cmd_voice,
         "tools": cmd_tools,
         "recover": cmd_recover,
         "gui": cmd_gui,

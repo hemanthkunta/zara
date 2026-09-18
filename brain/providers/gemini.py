@@ -52,7 +52,29 @@ class GeminiProvider(LLMProvider):
         headers = {"Content-Type": "application/json"}
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers)
 
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        import ssl
+        try:
+            ctx = ssl.create_default_context()
+        except Exception:
+            ctx = None
+
+        try:
+            resp_handle = urllib.request.urlopen(req, timeout=60, context=ctx)
+        except urllib.error.HTTPError as http_err:
+            http_err.close()
+            raise
+        except urllib.error.URLError as ssl_err:
+            if "CERTIFICATE_VERIFY_FAILED" in str(ssl_err):
+                u_ctx = ssl._create_unverified_context()
+                try:
+                    resp_handle = urllib.request.urlopen(req, timeout=60, context=u_ctx)
+                except urllib.error.HTTPError as h_err:
+                    h_err.close()
+                    raise
+            else:
+                raise
+
+        with resp_handle as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
         candidates = data.get("candidates", [])

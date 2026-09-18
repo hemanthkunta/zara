@@ -79,22 +79,62 @@ PLANNING_PROMPT_TEMPLATE = """Task: {task}
 Context: {context}
 Past Lessons: {past_lessons}
 
-Break this task down into the smallest verifiable steps. For each step, provide:
-1. Step Title & Description
-2. Action Type (code, execute, test, search, review)
-3. Target Files or Commands
-4. Explicit Success Condition ("Success looks like: ...")
+Available Registered Tools:
+{available_tools}
+
+IMPORTANT OPERATING RULES FOR PLANNING:
+- You are producing a structured plan of verifiable tool calls, NOT executing shell commands.
+- NATURAL LANGUAGE IS NOT A SHELL COMMAND. Never put natural-language sentences in terminal_execute or commands.
+- You must select an appropriate registered tool from the list above for each step. Do not invent tools.
+- File creation/writing must use 'write_file' (with 'path' and 'content' arguments).
+- Inspecting files must use 'read_file'.
+- Running scripts, programs, or commands must use 'terminal_execute' (with 'command' argument).
+- Running test suites should use 'run_tests' or 'terminal_execute'.
+- Each step MUST have a concrete, measurable success_condition (e.g. "File hello_zara.py exists and AST syntax is valid", "Output contains 'Hello from ZARA' and exit code is 0").
+- Produce the minimum number of steps necessary to fulfill and verify the task.
+- Do NOT claim success before verification.
+
+Return ONLY a valid JSON object with the following schema:
+{{
+  "steps": [
+    {{
+      "id": 1,
+      "title": "Short descriptive step title",
+      "description": "What this step accomplishes",
+      "tool": "tool_name_from_registry",
+      "arguments": {{ "arg1": "val1" }},
+      "dependencies": [],
+      "success_condition": "Explicit measurable condition"
+    }}
+  ]
+}}
 """
 
-DIAGNOSE_PROMPT_TEMPLATE = """Step Failed: {step_title}
+DIAGNOSE_PROMPT_TEMPLATE = """Failure in Step #{step_id}: {step_title}
+Tool Used: {tool_name}
+Arguments Used: {arguments}
 Expected Success Condition: {success_condition}
 Actual Output / Error:
 {error_output}
+Attempt: {attempt} of {max_attempts}
+Previous Failed Attempts on this step: {previous_attempts}
 
-Attempt #{attempt} of {max_attempts}.
-1. Analyze the root cause.
-2. State a concrete hypothesis.
-3. Formulate the single targeted fix.
+Analyze the root cause:
+A. Are the tool arguments wrong?
+B. Is the shell command wrong?
+C. Is the file/code implementation logic wrong?
+D. Is the verification success condition wrong?
+E. Is a required dependency or file missing?
+
+Generate ONE targeted correction. Do NOT repeat the exact same failed action.
+Return ONLY a valid JSON object:
+{{
+  "root_cause_category": "tool_arguments | command | code_logic | dependency | verification",
+  "hypothesis": "Concrete explanation of why it failed",
+  "corrected_tool": "tool_name",
+  "corrected_arguments": {{ "arg": "new_value" }},
+  "proposed_fix": {{ "action": "description_of_patch" }}
+}}
 """
 
 REFLECTION_PROMPT_TEMPLATE = """Task: {task}

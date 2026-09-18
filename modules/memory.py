@@ -43,13 +43,12 @@ class MemoryStore:
     def _sync_existing_entries_to_vector_store(self) -> None:
         """Ensure all text log entries are indexed into the semantic vector store."""
         entries = self.get_all_entries()
+        docs = []
         for idx, entry in enumerate(entries):
             doc_id = f"entry_{idx}"
-            self.vector_store.upsert_document(
-                doc_id=doc_id,
-                content=entry,
-                metadata={"index": idx}
-            )
+            docs.append((doc_id, entry, {"index": idx}))
+        if docs:
+            self.vector_store.upsert_documents(docs)
 
     def append_reflection(self, reflection: Reflection) -> None:
         """Append a completed task reflection to the persistent log and semantic vector store."""
@@ -153,3 +152,8 @@ class MemoryStore:
             return []
         content = self.memory_path.read_text(encoding="utf-8")
         return [e.strip() for e in content.split("---") if e.strip()]
+
+    def close(self) -> None:
+        """Explicit cleanup of memory store resources."""
+        if hasattr(self, "vector_store") and hasattr(self.vector_store, "close"):
+            self.vector_store.close()

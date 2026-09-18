@@ -4,6 +4,7 @@ ZARA Terminal and Test Runner Tools.
 from pathlib import Path
 import subprocess
 import time
+import os
 from typing import Dict, Any, Optional
 from tools.base import BaseTool, ToolResult
 from config.settings import RiskLevel, BASE_DIR, COMMAND_TIMEOUT_SECONDS
@@ -38,7 +39,7 @@ class TerminalExecutionTool(BaseTool):
         else:
             return ToolResult(
                 success=False,
-                data={"stdout": result.stdout, "exit_code": result.exit_code},
+                data={"stdout": result.stdout, "stderr": result.stderr, "exit_code": result.exit_code},
                 error=result.stderr or f"Command failed with exit code {result.exit_code}"
             )
 
@@ -62,15 +63,21 @@ class TestRunnerTool(BaseTool):
     def run(self, test_path: str = "tests", framework: str = "auto") -> ToolResult:
         start = time.time()
         # Prefer python3 -m unittest discover for zero external dependencies
-        cmd = f"python3 -m unittest discover -s {test_path} -v"
+        if test_path.endswith(".py"):
+            cmd = f"python3 -m unittest {test_path} -v"
+        else:
+            cmd = f"python3 -m unittest discover -s {test_path} -v"
         try:
+            env = dict(os.environ)
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
             proc = subprocess.run(
                 cmd,
                 shell=True,
                 cwd=self.workspace_root,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
+                env=env
             )
             duration = time.time() - start
             passed = (proc.returncode == 0)

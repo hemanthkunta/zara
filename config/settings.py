@@ -16,11 +16,13 @@ CHECKPOINTS_DIR = BASE_DIR / "checkpoints"
 SECURITY_SCOPE_FILE = CONFIG_DIR / "security_scope.json"
 AUDIT_LOG_FILE = LOGS_DIR / "audit.jsonl"
 SYSTEM_LOG_FILE = LOGS_DIR / "zara.log"
+SCREENSHOTS_DIR = LOGS_DIR / "screenshots"
 
 # Ensure runtime directories exist
-for directory in (MEMORY_DIR, JOB_QUEUE_DIR, CONFIG_DIR, LOGS_DIR, CHECKPOINTS_DIR):
+for directory in (MEMORY_DIR, JOB_QUEUE_DIR, CONFIG_DIR, LOGS_DIR, CHECKPOINTS_DIR, SCREENSHOTS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
+# Risk Levels for Human Confirmation System
 # Risk Levels for Human Confirmation System
 class RiskLevel(str, Enum):
     LOW = "LOW"            # Read-only operations, safe inspects
@@ -28,17 +30,54 @@ class RiskLevel(str, Enum):
     HIGH = "HIGH"          # Destructive ops, system-level execution, git push
     CRITICAL = "CRITICAL"  # Operations requiring explicit double-confirmation or outside default scope
 
+# Failure Types for Fine-Grained Error Classification
+class FailureType(str, Enum):
+    TIMEOUT = "timeout"
+    COMMAND_FAILURE = "command_failure"
+    TOOL_VALIDATION_FAILURE = "tool_validation_failure"
+    PLANNER_FAILURE = "planner_failure"
+    VERIFICATION_FAILURE = "verification_failure"
+    PERMISSION_FAILURE = "permission_failure"
+    DEPENDENCY_FAILURE = "dependency_failure"
+    UNEXPECTED_EXCEPTION = "unexpected_exception"
+
 # Loop & Safety parameters
-MAX_DIAGNOSE_RETRIES = int(os.getenv("ZARA_MAX_RETRIES", "5"))
+MAX_STEPS = int(os.getenv("ZARA_MAX_STEPS", "20"))
+MAX_RETRIES_PER_STEP = int(os.getenv("ZARA_MAX_RETRIES_PER_STEP", "2"))
+MAX_TOTAL_RETRIES = int(os.getenv("ZARA_MAX_TOTAL_RETRIES", "5"))
+MAX_DIAGNOSE_RETRIES = MAX_TOTAL_RETRIES
+MAX_EXECUTION_TIME_SECONDS = int(os.getenv("ZARA_MAX_EXECUTION_TIME", "300"))
 COMMAND_TIMEOUT_SECONDS = int(os.getenv("ZARA_CMD_TIMEOUT", "60"))
 SANDBOX_DOCKER_IMAGE = os.getenv("ZARA_DOCKER_IMAGE", "python:3.11-slim")
 SANDBOX_MEMORY_LIMIT = os.getenv("ZARA_SANDBOX_MEM", "512m")
 SANDBOX_CPU_LIMIT = os.getenv("ZARA_SANDBOX_CPU", "1.0")
 
+# Research & Browser Budget Parameters
+MAX_RESEARCH_QUERIES = int(os.getenv("ZARA_MAX_RESEARCH_QUERIES", "8"))
+MAX_SOURCES = int(os.getenv("ZARA_MAX_SOURCES", "10"))
+MAX_PAGES = int(os.getenv("ZARA_MAX_PAGES", "10"))
+MAX_RESEARCH_TIME_SECONDS = int(os.getenv("ZARA_MAX_RESEARCH_TIME_SECONDS", "120"))
+
+# Computer Interaction & Screenshot Parameters
+MAX_SCREENSHOT_AGE_HOURS = int(os.getenv("ZARA_MAX_SCREENSHOT_AGE_HOURS", "24"))
+MAX_SCREENSHOTS_KEPT = int(os.getenv("ZARA_MAX_SCREENSHOTS_KEPT", "20"))
+MAX_GUI_RETRIES = int(os.getenv("ZARA_MAX_GUI_RETRIES", "3"))
+DEFAULT_DISPLAY_ID = int(os.getenv("ZARA_DEFAULT_DISPLAY_ID", "1"))
+
 # Voice Parameters
 ENABLE_VOICE = os.getenv("ZARA_ENABLE_VOICE", "true").lower() in ("true", "1", "yes")
 VOICE_NAME = os.getenv("ZARA_VOICE_NAME", "Samantha")  # Default macOS female voice
 VOICE_RATE = int(os.getenv("ZARA_VOICE_RATE", "190"))
+WAKE_WORD = os.getenv("ZARA_WAKE_WORD", "ZARA")
+MAX_RECORDING_SECONDS = int(os.getenv("ZARA_MAX_RECORDING_SECONDS", "15"))
+VOICE_SILENCE_TIMEOUT = float(os.getenv("ZARA_VOICE_SILENCE_TIMEOUT", "1.5"))
+TTS_ENABLED = os.getenv("ZARA_ENABLE_TTS", "true").lower() in ("true", "1", "yes")
+STT_PROVIDER = os.getenv("ZARA_STT_PROVIDER", "local")  # local, mock, remote
+TTS_PROVIDER = os.getenv("ZARA_TTS_PROVIDER", "macos")  # macos, mock, elevenlabs
+VOICE_LANGUAGE = os.getenv("ZARA_VOICE_LANGUAGE", "en-US")
+MAX_VOICE_SUMMARY_LENGTH = int(os.getenv("ZARA_MAX_VOICE_SUMMARY_LENGTH", "200"))
+VOICE_TEMP_DIR = LOGS_DIR / "voice"
+VOICE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # LLM Brain Configuration
 DEFAULT_LLM_PROVIDER = os.getenv("ZARA_LLM_PROVIDER", "auto") # auto, gemini, anthropic, openai, ollama, mock

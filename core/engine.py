@@ -4,13 +4,25 @@ Perceive -> Plan -> Act -> Verify -> Diagnose & Retry -> Reflect -> Persist -> C
 """
 import os
 import time
+import re
+import json
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, Tuple
 
 from config.settings import (
     BASE_DIR,
     MAX_DIAGNOSE_RETRIES,
-    ENABLE_VOICE
+    ENABLE_VOICE,
+    MAX_STEPS,
+    MAX_RETRIES_PER_STEP,
+    MAX_TOTAL_RETRIES,
+    MAX_EXECUTION_TIME_SECONDS,
+    MAX_RESEARCH_QUERIES,
+    MAX_SOURCES,
+    MAX_PAGES,
+    MAX_RESEARCH_TIME_SECONDS,
+    FailureType
 )
 from core.state import (
     TaskContext,
@@ -19,18 +31,43 @@ from core.state import (
     ActionType,
     ExecutionResult,
     Diagnosis,
-    Reflection
+    Reflection,
+    ResearchSource,
+    ResearchEvidence,
+    SourceConflict,
+    ResearchReport
 )
+from core.prompts import PLANNING_PROMPT_TEMPLATE
 from brain.router import LLMRouter
 from tools.registry import ToolRegistry
 from tools.filesystem import ReadFileTool, WriteFileTool, PatchFileTool, ListDirTool
 from tools.terminal import TerminalExecutionTool, TestRunnerTool
-from tools.macos_control import MacOSNotificationTool, MacOSClipboardTool, MacOSScreenshotTool
-from tools.browser import BrowserTool
+from tools.macos_control import (
+    MacOSNotificationTool,
+    MacOSClipboardTool,
+    MacOSScreenshotTool,
+    MouseMoveTool,
+    MouseClickTool,
+    KeyboardTypeTool,
+    KeyboardHotkeyTool,
+    ApplicationLaunchTool,
+    ApplicationCloseTool,
+    ActiveWindowTool,
+    ScreenshotLifecycleManager
+)
+from tools.browser import (
+    BrowserTool,
+    WebSearchTool,
+    BrowserOpenTool,
+    ExtractContentTool,
+    FollowLinkTool,
+    CollectSourceTool
+)
 from modules.memory import MemoryStore
 from modules.execution import ExecutionEngine
 from modules.coding import CodingModule
 from modules.debugging import DebuggingModule
+from modules.research import ResearchEngine
 from modules.voice import VoiceSynthesizer
 from modules.security import SecurityModule, ScopeViolationError
 from modules.job_hunter import JobHunterModule
@@ -47,11 +84,27 @@ class ZaraEngine:
         workspace_root: str = str(BASE_DIR),
         use_docker: bool = False,
         enable_voice: bool = ENABLE_VOICE,
-        on_step_update: Optional[Callable[[str, PlanStep], None]] = None
+        on_step_update: Optional[Callable[[str, PlanStep], None]] = None,
+        max_steps: int = MAX_STEPS,
+        max_retries_per_step: int = MAX_RETRIES_PER_STEP,
+        max_total_retries: int = MAX_TOTAL_RETRIES,
+        max_execution_time_seconds: int = MAX_EXECUTION_TIME_SECONDS,
+        max_research_queries: Optional[int] = None,
+        max_sources: Optional[int] = None,
+        max_pages: Optional[int] = None,
+        max_research_time_seconds: Optional[int] = None
     ):
         self.workspace_root = Path(workspace_root).resolve()
         self.use_docker = use_docker
         self.on_step_update = on_step_update
+        self.max_steps = max_steps
+        self.max_retries_per_step = max_retries_per_step
+        self.max_total_retries = max_total_retries
+        self.max_execution_time_seconds = max_execution_time_seconds
+        self.max_research_queries = max_research_queries or MAX_RESEARCH_QUERIES
+        self.max_sources = max_sources or MAX_SOURCES
+        self.max_pages = max_pages or MAX_PAGES
+        self.max_research_time_seconds = max_research_time_seconds or MAX_RESEARCH_TIME_SECONDS
 
         # Subsystems
         self.brain = LLMRouter()
@@ -59,7 +112,9 @@ class ZaraEngine:
         self.execution = ExecutionEngine(str(self.workspace_root), use_docker=use_docker)
         self.coding = CodingModule(str(self.workspace_root))
         self.debugging = DebuggingModule()
+        self.research = ResearchEngine()
         self.voice = VoiceSynthesizer(enabled=enable_voice)
+        self._voice_controller = None
         self.security = SecurityModule()
         self.job_hunter = JobHunterModule()
         self.orchestrator = TaskOrchestrator()
@@ -72,6 +127,18 @@ class ZaraEngine:
         self.tools = ToolRegistry()
         self._register_default_tools()
 
+    @property
+    def voice_controller(self):
+        """Lazy access to bidirectional VoiceInteractionController."""
+        if self._voice_controller is None:
+            from modules.voice_controller import VoiceInteractionController
+            self._voice_controller = VoiceInteractionController(self)
+        return self._voice_controller
+
+    def set_voice_controller(self, controller) -> None:
+        """Explicitly set custom or mock voice controller."""
+        self._voice_controller = controller
+
     def _register_default_tools(self) -> None:
         self.tools.register(ReadFileTool(self.workspace_root))
         self.tools.register(WriteFileTool(self.workspace_root))
@@ -79,10 +146,56 @@ class ZaraEngine:
         self.tools.register(ListDirTool(self.workspace_root))
         self.tools.register(TerminalExecutionTool(self.workspace_root, use_docker=self.use_docker))
         self.tools.register(TestRunnerTool(self.workspace_root))
-        self.tools.register(BrowserTool())
+        self.tools.register(WebSearchTool(self.research))
+        self.tools.register(BrowserOpenTool(self.research))
+        self.tools.register(ExtractContentTool(self.research))
+        self.tools.register(FollowLinkTool(self.research))
+        self.tools.register(CollectSourceTool())
+        self.tools.register(BrowserTool(self.research))
         self.tools.register(MacOSNotificationTool())
         self.tools.register(MacOSClipboardTool())
         self.tools.register(MacOSScreenshotTool())
+        self.tools.register(MouseMoveTool())
+        self.tools.register(MouseClickTool())
+        self.tools.register(KeyboardTypeTool())
+        self.tools.register(KeyboardHotkeyTool())
+        self.tools.register(ApplicationLaunchTool())
+        self.tools.register(ApplicationCloseTool())
+        self.tools.register(ActiveWindowTool())
+
+    def _record_event(
+        self,
+        context: TaskContext,
+        event: str,
+        step_id: Optional[int] = None,
+        tool: Optional[str] = None,
+        status: Optional[str] = None,
+        duration_ms: Optional[float] = None,
+        extra: Optional[Dict[str, Any]] = None
+    ) -> None:
+        entry = {
+            "event": event,
+            "timestamp": datetime.now().isoformat(),
+            "step_id": step_id,
+            "tool": tool,
+            "status": status,
+            "duration_ms": duration_ms,
+            **(extra or {})
+        }
+        context.events.append(entry)
+        audit_extra = dict(extra or {})
+        if status:
+            audit_extra["status"] = status
+        if duration_ms is not None:
+            audit_extra["duration_ms"] = duration_ms
+        audit_logger.log_event(
+            event_type=event,
+            action=tool or event,
+            step_id=step_id,
+            tool=tool,
+            duration_seconds=(duration_ms / 1000.0) if duration_ms else 0.0,
+            extra=audit_extra
+        )
 
     # 1. PERCEIVE
     def perceive(self, task: str, tag: str = "dev") -> TaskContext:
@@ -97,8 +210,10 @@ class ZaraEngine:
             task=task,
             tag=tag,
             working_dir=str(self.workspace_root),
-            past_lessons=past_lessons
+            past_lessons=past_lessons,
+            start_time=time.time()
         )
+        self._record_event(context, "task_started", extra={"task": task, "tag": tag})
         audit_logger.log_event("LOOP_PERCEIVE", action="perceive", extra={"task": task, "tag": tag})
         return context
 
@@ -106,8 +221,12 @@ class ZaraEngine:
     def plan(self, context: TaskContext, custom_steps: Optional[List[PlanStep]] = None) -> List[PlanStep]:
         """Break task into verifiable steps with clear success criteria using LLM Brain."""
         if custom_steps:
-            context.steps = custom_steps
-            return custom_steps
+            if len(custom_steps) > self.max_steps:
+                context.steps = custom_steps[:self.max_steps]
+            else:
+                context.steps = custom_steps
+            self._record_event(context, "plan_created", extra={"step_count": len(context.steps)})
+            return context.steps
 
         # Check special gated workflows
         if "security" in context.task.lower() and "audit" in context.task.lower():
@@ -122,6 +241,7 @@ class ZaraEngine:
                     success_condition="Authorized scan completes and generates findings"
                 )
             ]
+            self._record_event(context, "plan_created", extra={"step_count": len(context.steps)})
             return context.steps
 
         elif "job" in context.task.lower() and "apply" in context.task.lower():
@@ -136,51 +256,136 @@ class ZaraEngine:
                     success_condition="Draft packet created with status pending_human_approval"
                 )
             ]
+            self._record_event(context, "plan_created", extra={"step_count": len(context.steps)})
             return context.steps
 
-        # Use LLM Brain to plan discrete steps
-        plan_prompt = (
-            f"You are ZARA. Break this task into discrete, verifiable steps:\n"
-            f"Task: {context.task}\n"
-            f"Working directory: {context.working_dir}\n"
-            f"Past Lessons: {context.past_lessons}\n"
-            f"Return JSON with 'steps' array of objects: title, action_type ('code', 'execute', 'test'), target, payload, success_condition."
-        )
-        plan_data = self.brain.generate_structured(plan_prompt)
-        steps: List[PlanStep] = []
+        # Build dynamic tool descriptions from registered tools
+        tools_info = []
+        for t in self.tools.list_tools():
+            params = t["parameters"].get("properties", {})
+            req = t["parameters"].get("required", [])
+            tools_info.append(
+                f"- {t['name']}: {t['description']} (arguments: {list(params.keys())}, required: {req})"
+            )
+        available_tools_str = "\n".join(tools_info)
 
-        if isinstance(plan_data, dict) and "steps" in plan_data and isinstance(plan_data["steps"], list):
+        def _validate_and_build_steps(plan_data: Any) -> Tuple[List[PlanStep], Optional[str]]:
+            if not isinstance(plan_data, dict) or "steps" not in plan_data or not isinstance(plan_data["steps"], list):
+                return [], "Plan response does not contain a valid 'steps' list."
+            if not plan_data["steps"]:
+                return [], "Plan response contains an empty 'steps' list."
+
+            if len(plan_data["steps"]) > self.max_steps:
+                return [], f"Plan exceeds maximum allowed steps ({len(plan_data['steps'])} > {self.max_steps})."
+
+            parsed_steps: List[PlanStep] = []
             for i, s in enumerate(plan_data["steps"]):
-                try:
-                    action_type = ActionType(s.get("action_type", "execute"))
-                except ValueError:
-                    action_type = ActionType.EXECUTE
+                if not isinstance(s, dict):
+                    return [], f"Step {i+1} is not a valid object."
 
-                steps.append(PlanStep(
-                    id=i + 1,
-                    title=s.get("title", f"Step {i+1}"),
-                    action_type=action_type,
-                    description=s.get("description", s.get("title", "")),
-                    target=s.get("target", ""),
-                    payload=s.get("payload", {}),
-                    success_condition=s.get("success_condition", "Exits with return code 0")
+                # Tool selection
+                tool_name = s.get("tool")
+                if not tool_name and s.get("action_type") in ("code", "execute", "test"):
+                    legacy_map = {"code": "write_file", "execute": "terminal_execute", "test": "terminal_execute"}
+                    tool_name = legacy_map.get(s["action_type"])
+
+                if not tool_name:
+                    return [], f"Step {i+1} does not specify a tool."
+
+                tool_obj = self.tools.get(tool_name)
+                if not tool_obj:
+                    return [], f"Step {i+1} specifies unknown tool '{tool_name}'."
+
+                # Extract and validate arguments
+                args = s.get("arguments")
+                if args is None:
+                    args = s.get("payload", {})
+                if not isinstance(args, dict):
+                    return [], f"Step {i+1} arguments must be a dictionary."
+
+                # Ensure required arguments exist according to tool schema
+                is_valid, val_err = tool_obj.validate_inputs(args)
+                if not is_valid:
+                    return [], f"Step {i+1} argument validation failed for tool '{tool_name}': {val_err}"
+
+                # Never allow natural language tasks to be passed directly as commands
+                if tool_name == "terminal_execute":
+                    cmd = args.get("command", "").strip()
+                    if not cmd:
+                        return [], f"Step {i+1} terminal_execute requires a non-empty 'command'."
+                    if cmd == context.task.strip():
+                        return [], f"Step {i+1} attempts to execute the natural-language task prompt as a shell command."
+
+                # Parse dependencies
+                raw_deps = s.get("dependencies", [])
+                dep_ids: List[int] = []
+                if isinstance(raw_deps, list):
+                    for d in raw_deps:
+                        try:
+                            dep_ids.append(int(d))
+                        except (ValueError, TypeError):
+                            pass
+
+                step_id = s.get("id", i + 1)
+                title = s.get("title", f"Step {step_id}: {tool_name}")
+                description = s.get("description", title)
+                success_condition = s.get("success_condition", "Tool execution succeeds with exit code 0")
+                target = str(args.get("path") or args.get("command") or tool_name)
+
+                parsed_steps.append(PlanStep(
+                    id=step_id,
+                    title=title,
+                    action_type=ActionType.TOOL,
+                    description=description,
+                    target=target,
+                    payload=dict(args),
+                    tool=tool_name,
+                    arguments=dict(args),
+                    dependencies=dep_ids,
+                    success_condition=success_condition
                 ))
 
+            return parsed_steps, None
+
+        # 1. Primary planning prompt
+        plan_prompt = PLANNING_PROMPT_TEMPLATE.format(
+            task=context.task,
+            context=f"Working directory: {context.working_dir}",
+            past_lessons="\n".join(context.past_lessons) if context.past_lessons else "None",
+            available_tools=available_tools_str
+        )
+        plan_data = self.brain.generate_structured(plan_prompt)
+        steps, err_msg = _validate_and_build_steps(plan_data)
+
+        # 2. If invalid, attempt one safe recovery call with stronger prompt
         if not steps:
-            # Fallback default step
-            steps = [
-                PlanStep(
-                    id=1,
-                    title=f"Execute: {context.task}",
-                    action_type=ActionType.EXECUTE,
-                    description="Run requested task directly",
-                    target=context.task,
-                    payload={"command": context.task},
-                    success_condition="Command exits with return code 0"
-                )
-            ]
+            recovery_prompt = (
+                f"CRITICAL RECOVERY: Your previous plan was rejected ({err_msg}).\n"
+                f"Task: {context.task}\n"
+                f"Available Registered Tools:\n{available_tools_str}\n\n"
+                f"You MUST produce a valid JSON object with 'steps' array of valid tool calls.\n"
+                f"DO NOT execute natural language as a shell command.\n"
+                f"Each step must specify a registered 'tool' and valid 'arguments'.\n"
+            )
+            recovery_data = self.brain.generate_structured(recovery_prompt)
+            steps, err_msg = _validate_and_build_steps(recovery_data)
+
+        # 3. If STILL invalid, STOP safely - never fall back to shell execution!
+        if not steps:
+            context.steps = []
+            context.is_completed = False
+            context.requires_human_input = True
+            context.blocker_reason = "LLM planner returned no valid executable plan; refusing to interpret natural language as a shell command."
+            audit_logger.log_event(
+                "PLAN_REJECTED",
+                action="plan",
+                error=context.blocker_reason,
+                extra={"task": context.task, "last_validation_error": err_msg}
+            )
+            return []
 
         context.steps = steps
+        self._record_event(context, "plan_created", extra={"step_count": len(steps)})
         audit_logger.log_event("LOOP_PLAN", action="plan", extra={"step_count": len(steps)})
         return steps
 
@@ -191,26 +396,110 @@ class ZaraEngine:
         step.attempts += 1
         self._notify_step("ACT", step)
 
-        if step.action_type == ActionType.CODE:
+        tool_ident = step.tool or (
+            step.action_type.value if hasattr(step.action_type, "value") else str(step.action_type)
+        )
+        self._record_event(context, "tool_selected", step_id=step.id, tool=tool_ident)
+        start_t = time.time()
+        self._record_event(context, "tool_started", step_id=step.id, tool=tool_ident)
+
+        result: ExecutionResult
+        raw_return_val = None
+
+        # 1. Preferred execution via ToolRegistry
+        if step.action_type == ActionType.TOOL or step.tool:
+            tool_name = step.tool
+            if not tool_name:
+                result = ExecutionResult(success=False, exit_code=1, stdout="", stderr="Step missing tool name")
+            else:
+                tool = self.tools.get(tool_name)
+                if not tool:
+                    result = ExecutionResult(success=False, exit_code=1, stdout="", stderr=f"Tool '{tool_name}' not found in registry")
+                else:
+                    args = step.arguments or step.payload
+                    is_valid, val_err = tool.validate_inputs(args)
+                    if not is_valid:
+                        result = ExecutionResult(success=False, exit_code=1, stdout="", stderr=f"Validation failed: {val_err}")
+                    elif tool_name == "terminal_execute" and args.get("command", "").strip() == context.task.strip():
+                        result = ExecutionResult(success=False, exit_code=1, stdout="", stderr="Refusing to execute natural language prompt as shell command.")
+                    elif tool_name == "web_search" and len(context.research_queries) >= self.max_research_queries:
+                        result = ExecutionResult(success=False, exit_code=1, stdout="", stderr=f"Exceeded maximum research queries budget ({self.max_research_queries})")
+                    elif tool_name in ("browser_open", "browser_scrape") and len(context.opened_urls) >= self.max_pages:
+                        result = ExecutionResult(success=False, exit_code=1, stdout="", stderr=f"Exceeded maximum pages budget ({self.max_pages})")
+                    elif (tool_name in ("web_search", "browser_open", "browser_scrape", "extract_content", "follow_link")) and (time.time() - context.start_time) > self.max_research_time_seconds:
+                        result = ExecutionResult(success=False, exit_code=1, stdout="", stderr=f"Exceeded maximum research time limit ({self.max_research_time_seconds}s)")
+                    else:
+                        # Pre-execution static validation if executing a Python script
+                        cmd = args.get("command", "").strip() if tool_name == "terminal_execute" else ""
+                        static_err = None
+                        if tool_name == "terminal_execute" and cmd:
+                            py_match = re.search(r'(?:python3?|pytest)\s+([a-zA-Z0-9_\-./]+\.py)', cmd)
+                            if py_match:
+                                target_file = py_match.group(1)
+                                target_path = self.workspace_root / target_file
+                                if target_path.exists():
+                                    is_valid, err_msg = self.coding.validate_static(target_file)
+                                    if not is_valid:
+                                        static_err = err_msg
+
+                        if static_err:
+                            result = ExecutionResult(
+                                success=False,
+                                exit_code=1,
+                                stdout="",
+                                stderr=f"Pre-execution static validation failed:\n{static_err}",
+                                duration_seconds=0.0,
+                                command=cmd
+                            )
+                        else:
+                            tool_res = self.tools.execute(tool_name, args, task_id=context.task[:30])
+                            raw_return_val = tool_res.data
+
+                            if isinstance(tool_res.data, dict):
+                                stdout = str(tool_res.data.get("stdout", ""))
+                                stderr = str(tool_res.data.get("stderr", "")) or (tool_res.error or "")
+                                exit_code = tool_res.data.get("exit_code", 0 if tool_res.success else 1)
+                            else:
+                                stdout = str(tool_res.data) if (tool_res.data is not None and tool_res.success) else ""
+                                stderr = tool_res.error or ("" if tool_res.success else "Tool execution failed")
+                                exit_code = 0 if tool_res.success else 1
+
+                            result = ExecutionResult(
+                                success=tool_res.success,
+                                exit_code=exit_code,
+                                stdout=stdout,
+                                stderr=stderr,
+                                duration_seconds=tool_res.duration_seconds,
+                                command=args.get("command") if tool_name == "terminal_execute" else None
+                            )
+
+        # Legacy ActionType handlers for backward compatibility
+        elif step.action_type == ActionType.CODE:
             file_path = step.payload.get("file_path", step.target)
             content = step.payload.get("content", "")
             success, err = self.coding.write_file(file_path, content)
+            raw_return_val = {"file_path": file_path, "success": success}
             if success:
-                return ExecutionResult(success=True, exit_code=0, stdout=f"Wrote file {file_path}", stderr="")
+                result = ExecutionResult(success=True, exit_code=0, stdout=f"Wrote file {file_path}", stderr="")
             else:
-                return ExecutionResult(success=False, exit_code=1, stdout="", stderr=err or "Code write failed")
+                result = ExecutionResult(success=False, exit_code=1, stdout="", stderr=err or "Code write failed")
 
         elif step.action_type in (ActionType.EXECUTE, ActionType.TEST):
             command = step.payload.get("command", step.target)
-            return self.execution.execute(command, task_id=context.task[:30])
+            if command.strip() == context.task.strip():
+                result = ExecutionResult(success=False, exit_code=1, stdout="", stderr="Refusing to execute natural language task as shell command.")
+            else:
+                result = self.execution.execute(command, task_id=context.task[:30])
+                raw_return_val = {"stdout": result.stdout, "stderr": result.stderr, "exit_code": result.exit_code}
 
         elif step.action_type == ActionType.SECURITY_AUDIT:
             target = step.payload.get("target", "127.0.0.1")
             try:
                 findings = self.security.run_authorized_port_scan(target)
-                return ExecutionResult(success=True, exit_code=0, stdout=str(findings), stderr="")
+                raw_return_val = findings
+                result = ExecutionResult(success=True, exit_code=0, stdout=str(findings), stderr="")
             except ScopeViolationError as e:
-                return ExecutionResult(success=False, exit_code=-1, stdout="", stderr=str(e))
+                result = ExecutionResult(success=False, exit_code=-1, stdout="", stderr=str(e))
 
         elif step.action_type == ActionType.JOB_DRAFT:
             job_id = step.payload.get("job_id", "job-1")
@@ -223,74 +512,392 @@ class ZaraEngine:
                 job_description=step.payload.get("description", "Software Engineer role"),
                 candidate_profile=step.payload.get("candidate_profile", {"name": "Candidate"})
             )
-            return ExecutionResult(
+            raw_return_val = {"draft_path": draft_path}
+            result = ExecutionResult(
                 success=True,
                 exit_code=0,
                 stdout=f"Application drafted and queued at {draft_path} for human approval.",
                 stderr=""
             )
+        else:
+            result = ExecutionResult(success=False, exit_code=1, stdout="", stderr=f"Unknown action type {step.action_type}")
 
-        return ExecutionResult(success=False, exit_code=1, stdout="", stderr=f"Unknown action type {step.action_type}")
+        duration_s = time.time() - start_t
+        duration_ms = duration_s * 1000.0
+
+        # Build structured observation
+        step.observation = {
+            "tool": tool_ident,
+            "arguments": dict(step.arguments or step.payload or {}),
+            "success": result.success,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "return_value": raw_return_val,
+            "exit_code": result.exit_code,
+            "duration_seconds": duration_s,
+            "error": result.stderr if not result.success else None,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        if not result.success:
+            err_lower = (result.stderr or "").lower()
+            if "not found in registry" in err_lower or "missing tool name" in err_lower:
+                step.failure_type = FailureType.TOOL_VALIDATION_FAILURE.value
+            elif "validation failed" in err_lower:
+                step.failure_type = FailureType.TOOL_VALIDATION_FAILURE.value
+            elif "timed out" in err_lower:
+                step.failure_type = FailureType.TIMEOUT.value
+            elif "scopeviolation" in err_lower or "permission" in err_lower:
+                step.failure_type = FailureType.PERMISSION_FAILURE.value
+            else:
+                step.failure_type = FailureType.COMMAND_FAILURE.value
+
+        # Update context tracking for files and tests
+        args = step.arguments or step.payload
+        if tool_ident == "write_file":
+            p = args.get("path")
+            if p and result.success:
+                if p not in context.files_created and p not in context.files_modified:
+                    context.files_created.append(p)
+                elif p in context.files_created and p not in context.files_modified:
+                    context.files_modified.append(p)
+        elif tool_ident == "patch_file":
+            p = args.get("path")
+            if p and result.success and p not in context.files_modified:
+                context.files_modified.append(p)
+        elif tool_ident == "read_file":
+            p = args.get("path")
+            if p and p not in context.files_inspected:
+                context.files_inspected.append(p)
+        elif tool_ident == "terminal_execute":
+            cmd = args.get("command", "")
+            if any(term in cmd.lower() for term in ["test", "unittest", "pytest"]):
+                if cmd not in context.tests_executed:
+                    context.tests_executed.append(cmd)
+        elif tool_ident == "run_tests":
+            tp = args.get("test_path", "tests")
+            if tp not in context.tests_executed:
+                context.tests_executed.append(tp)
+        elif tool_ident == "web_search":
+            q = args.get("query")
+            if q and q not in context.research_queries:
+                context.research_queries.append(q)
+            if isinstance(raw_return_val, dict) and "results" in raw_return_val:
+                for r in raw_return_val["results"]:
+                    sid = f"source_{len(context.sources)+1:02d}"
+                    src = ResearchSource(
+                        source_id=sid,
+                        url=r.get("url", ""),
+                        title=r.get("title", ""),
+                        domain=r.get("domain", ""),
+                        relevant_excerpt=r.get("snippet", ""),
+                        reliability=r.get("reliability", "primary"),
+                        is_authoritative=r.get("is_authoritative", False)
+                    )
+                    context.add_source(src)
+        elif tool_ident in ("browser_open", "browser_scrape"):
+            u = args.get("url")
+            if u:
+                if result.success and u not in context.opened_urls:
+                    context.opened_urls.append(u)
+                elif not result.success and u not in context.failed_sources:
+                    context.failed_sources.append(u)
+                if isinstance(raw_return_val, dict) and result.success:
+                    sid = f"source_{len(context.sources)+1:02d}"
+                    src = ResearchSource(
+                        source_id=sid,
+                        url=raw_return_val.get("url", u),
+                        title=raw_return_val.get("title", u),
+                        domain=raw_return_val.get("domain", ""),
+                        relevant_excerpt=raw_return_val.get("content", "")[:300],
+                        reliability=raw_return_val.get("reliability", "primary"),
+                        is_authoritative=raw_return_val.get("is_authoritative", False)
+                    )
+                    context.add_source(src)
+        elif tool_ident == "extract_content":
+            if isinstance(raw_return_val, dict) and "evidence" in raw_return_val:
+                for ev_dict in raw_return_val["evidence"]:
+                    context.add_evidence(
+                        ResearchEvidence(
+                            claim=ev_dict.get("claim", ""),
+                            evidence=ev_dict.get("evidence", ""),
+                            source_id=ev_dict.get("source_id", "source_01"),
+                            confidence=ev_dict.get("confidence", 0.9),
+                            verified=ev_dict.get("verified", True)
+                        )
+                    )
+        elif tool_ident == "collect_source":
+            if isinstance(raw_return_val, dict):
+                src = ResearchSource(
+                    source_id=raw_return_val.get("source_id", f"source_{len(context.sources)+1:02d}"),
+                    url=raw_return_val.get("url", ""),
+                    title=raw_return_val.get("title", ""),
+                    domain=raw_return_val.get("domain", ""),
+                    relevant_excerpt=raw_return_val.get("relevant_excerpt", ""),
+                    reliability=raw_return_val.get("reliability", "primary"),
+                    is_authoritative=raw_return_val.get("is_authoritative", False)
+                )
+                context.add_source(src)
+
+        self._record_event(
+            context,
+            "tool_finished",
+            step_id=step.id,
+            tool=tool_ident,
+            status="success" if result.success else "failed",
+            duration_ms=duration_ms,
+            extra={"exit_code": result.exit_code}
+        )
+
+        return result
 
     # 4. VERIFY
-    def verify(self, step: PlanStep, result: ExecutionResult) -> bool:
-        """Verify real check against expected success condition."""
+    def verify(self, step: PlanStep, result: ExecutionResult, context: Optional[TaskContext] = None) -> bool:
+        """Verify real check against expected success condition with structured evidence."""
         self._notify_step("VERIFY", step)
+        if context:
+            self._record_event(context, "verification_started", step_id=step.id)
+
         step.actual_output = result.stdout or result.stderr
+        evidence: List[str] = []
 
         if not result.success or result.exit_code != 0:
+            evidence.append(f"Command execution failed with exit code {result.exit_code}: {result.stderr or 'Error'}")
             step.error_message = result.stderr or f"Exit code {result.exit_code}"
             step.status = StepStatus.FAILED
+            step.verification = {"verified": False, "evidence": evidence}
+            if not step.failure_type:
+                step.failure_type = FailureType.COMMAND_FAILURE.value
+            if context:
+                self._record_event(context, "verification_finished", step_id=step.id, status="failed", extra={"evidence": evidence})
             return False
 
-        # Additional verification logic if verify_command provided
-        verify_cmd = step.payload.get("verify_command")
+        evidence.append(f"Tool executed successfully with exit code 0 (duration: {result.duration_seconds:.2f}s)")
+        args = step.arguments or step.payload
+
+        # 1. Evidence check for file creation (write_file)
+        if step.tool == "write_file" or step.action_type == ActionType.CODE:
+            file_path = args.get("path") or args.get("file_path") or step.target
+            if file_path:
+                target_file = (self.workspace_root / file_path).resolve()
+                if not target_file.exists():
+                    evidence.append(f"Expected file '{file_path}' does not exist on disk.")
+                    step.error_message = f"Verification failed: Expected file '{file_path}' does not exist on disk."
+                    step.status = StepStatus.FAILED
+                    step.verification = {"verified": False, "evidence": evidence}
+                    step.failure_type = FailureType.VERIFICATION_FAILURE.value
+                    if context:
+                        self._record_event(context, "verification_finished", step_id=step.id, status="failed", extra={"evidence": evidence})
+                    return False
+                else:
+                    evidence.append(f"File '{file_path}' exists on disk ({target_file.stat().st_size} bytes)")
+
+        # 2. Evidence check for expected output in condition
+        cond = (step.success_condition or "").strip()
+        if cond and result.stdout:
+            # Check for explicitly quoted expected output strings, e.g. prints 'Hello from ZARA'
+            quoted = re.findall(r"['\"]([^'\"]+)['\"]", cond)
+            for expected_str in quoted:
+                if any(kw in cond.lower() for kw in ["print", "output", "contain", "return", "equal"]):
+                    if expected_str not in result.stdout:
+                        evidence.append(f"Verification failed: Output does not contain expected substring '{expected_str}'.")
+                        step.error_message = (
+                            f"Verification failed: Output does not contain expected substring '{expected_str}'. "
+                            f"Actual stdout: {result.stdout.strip()}"
+                        )
+                        step.status = StepStatus.FAILED
+                        step.verification = {"verified": False, "evidence": evidence}
+                        step.failure_type = FailureType.VERIFICATION_FAILURE.value
+                        if context:
+                            self._record_event(context, "verification_finished", step_id=step.id, status="failed", extra={"evidence": evidence})
+                        return False
+                    else:
+                        evidence.append(f"Output matched expected criterion: '{expected_str}'")
+
+        # 3. Additional verification command if specified
+        verify_cmd = args.get("verify_command")
         if verify_cmd:
             verify_res = self.execution.execute(verify_cmd)
             if not verify_res.success or verify_res.exit_code != 0:
+                evidence.append(f"Verification check failed ({verify_cmd}): {verify_res.stderr}")
                 step.error_message = f"Verification check failed ({verify_cmd}): {verify_res.stderr}"
                 step.status = StepStatus.FAILED
+                step.verification = {"verified": False, "evidence": evidence}
+                step.failure_type = FailureType.VERIFICATION_FAILURE.value
+                if context:
+                    self._record_event(context, "verification_finished", step_id=step.id, status="failed", extra={"evidence": evidence})
                 return False
+            else:
+                evidence.append(f"Verification check command succeeded: {verify_cmd}")
 
+        if step.tool == "read_file":
+            evidence.append(f"Read file content successfully ({len(result.stdout)} characters)")
+        elif step.tool == "list_dir":
+            evidence.append("Directory listing retrieved successfully")
+
+        step.verification = {"verified": True, "evidence": evidence}
         step.status = StepStatus.PASSED
+        if context:
+            self._record_event(context, "verification_finished", step_id=step.id, status="passed", extra={"evidence": evidence})
         return True
 
     # 5. DIAGNOSE & RETRY
     def diagnose_and_retry(self, step: PlanStep, result: ExecutionResult, context: TaskContext) -> bool:
-        """Diagnose failure, formulate targeted hypothesis, and retry up to MAX_DIAGNOSE_RETRIES."""
-        while step.attempts < MAX_DIAGNOSE_RETRIES:
-            self._notify_step(f"DIAGNOSE (Attempt {step.attempts}/{MAX_DIAGNOSE_RETRIES})", step)
-            error_output = result.stderr or result.stdout or "Step failed without stdout/stderr"
+        """Diagnose failure, formulate targeted hypothesis, and retry up to limits."""
+        previous_attempts: List[Dict[str, Any]] = []
+
+        while step.attempts < self.max_retries_per_step:
+            if context.total_retries >= self.max_total_retries:
+                step.status = StepStatus.BLOCKED
+                context.requires_human_input = True
+                context.blocker_reason = (
+                    f"Total retry budget exceeded ({context.total_retries} >= {self.max_total_retries}). Escalating to user."
+                )
+                self._record_event(context, "retry_budget_exceeded", step_id=step.id, extra={"total_retries": context.total_retries})
+                return False
+
+            context.total_retries += 1
+            current_tool = step.tool or (
+                step.action_type.value if hasattr(step.action_type, "value") else str(step.action_type)
+            )
+            current_args = dict(step.arguments or step.payload)
+            previous_attempts.append({
+                "attempt": step.attempts,
+                "tool": current_tool,
+                "arguments": current_args,
+                "exit_code": result.exit_code,
+                "error": result.stderr or result.stdout or step.error_message
+            })
+
+            self._notify_step(f"DIAGNOSE (Attempt {step.attempts}/{self.max_retries_per_step})", step)
+            self._record_event(context, "diagnosis_started", step_id=step.id, extra={"attempt": step.attempts})
+            error_output = result.stderr or result.stdout or step.error_message or "Step failed without error output"
 
             diagnosis = self.debugging.diagnose_failure(
                 step_title=step.title,
                 expected_condition=step.success_condition,
                 error_output=error_output,
                 attempt=step.attempts,
-                llm_router=self.brain
+                llm_router=self.brain,
+                step=step,
+                task=context.task,
+                previous_attempts=previous_attempts
             )
             context.diagnoses.append(diagnosis)
+            self._record_event(context, "diagnosis_finished", step_id=step.id, extra={"hypothesis": diagnosis.hypothesis})
 
-            # Apply targeted fix if actionable fix is present
-            fix = diagnosis.proposed_fix
-            if fix.get("action") == "create_file" and fix.get("file"):
+            # Apply targeted fix
+            new_tool = diagnosis.corrected_tool or step.tool
+            new_args = dict(step.arguments or step.payload)
+            has_targeted_change = False
+
+            if diagnosis.corrected_arguments:
+                new_args.update(diagnosis.corrected_arguments)
+                has_targeted_change = True
+
+            fix = diagnosis.proposed_fix or {}
+            if fix.get("action") == "fix_syntax" and fix.get("file") and fix.get("new_content"):
+                self.coding.write_file(fix["file"], fix["new_content"])
+                context.files_modified.append(fix["file"])
+                context.patches_applied.append(fix)
+                has_targeted_change = True
+            elif fix.get("action") in ("patch_file", "patch_code") and fix.get("file"):
+                old = fix.get("old") or fix.get("old_str", "")
+                new = fix.get("new") or fix.get("new_str", "")
+                if old:
+                    self.coding.patch_file(fix["file"], old, new)
+                    context.files_modified.append(fix["file"])
+                    context.patches_applied.append(fix)
+                    has_targeted_change = True
+            elif fix.get("action") == "fix_implementation_logic" and fix.get("file"):
+                if fix.get("new_content"):
+                    self.coding.write_file(fix["file"], fix["new_content"])
+                    context.files_modified.append(fix["file"])
+                    context.patches_applied.append(fix)
+                    has_targeted_change = True
+                elif fix.get("patch"):
+                    p = fix["patch"]
+                    self.coding.patch_file(fix["file"], p.get("old", ""), p.get("new", ""))
+                    context.files_modified.append(fix["file"])
+                    context.patches_applied.append(fix)
+                    has_targeted_change = True
+            elif fix.get("action") == "fix_runtime_error" and fix.get("file"):
+                if fix.get("new_content"):
+                    self.coding.write_file(fix["file"], fix["new_content"])
+                    context.files_modified.append(fix["file"])
+                    context.patches_applied.append(fix)
+                    has_targeted_change = True
+                elif fix.get("patch"):
+                    p = fix["patch"]
+                    self.coding.patch_file(fix["file"], p.get("old", ""), p.get("new", ""))
+                    context.files_modified.append(fix["file"])
+                    context.patches_applied.append(fix)
+                    has_targeted_change = True
+            elif fix.get("action") == "fix_import" and fix.get("file"):
+                if fix.get("new_content"):
+                    self.coding.write_file(fix["file"], fix["new_content"])
+                    context.files_modified.append(fix["file"])
+                    context.patches_applied.append(fix)
+                    has_targeted_change = True
+                elif fix.get("patch"):
+                    p = fix["patch"]
+                    self.coding.patch_file(fix["file"], p.get("old", ""), p.get("new", ""))
+                    context.files_modified.append(fix["file"])
+                    context.patches_applied.append(fix)
+                    has_targeted_change = True
+            elif fix.get("action") == "create_file" and fix.get("file"):
                 self.coding.write_file(fix["file"], "# Auto-created by ZARA diagnostic\n")
+                context.files_created.append(fix["file"])
+                context.patches_applied.append(fix)
+                has_targeted_change = True
             elif step.payload.get("retry_patch"):
                 patch = step.payload["retry_patch"]
                 self.coding.patch_file(patch["file"], patch["old"], patch["new"])
+                context.files_modified.append(patch["file"])
+                context.patches_applied.append(patch)
+                has_targeted_change = True
+
+            # Loop detection: detect repeated identical attempts
+            is_duplicate = False
+            for past in previous_attempts:
+                if past["tool"] == new_tool and past["arguments"] == new_args and not has_targeted_change:
+                    is_duplicate = True
+                    break
+
+            if is_duplicate:
+                audit_logger.log_event(
+                    "RETRY_DUPLICATE_PREVENTED",
+                    action="diagnose",
+                    extra={"tool": new_tool, "args": new_args, "attempt": step.attempts}
+                )
+                self._record_event(context, "retry_duplicate_prevented", step_id=step.id)
+                step.status = StepStatus.BLOCKED
+                context.requires_human_input = True
+                context.blocker_reason = (
+                    f"Step '{step.title}' produced identical failed action ({new_tool}); "
+                    f"stopping useless retry loop after attempt {step.attempts}."
+                )
+                return False
+
+            # Update step parameters
+            step.tool = new_tool
+            step.arguments = new_args
+            step.payload = new_args
 
             # Retry ACT & VERIFY
+            self._record_event(context, "retry_started", step_id=step.id, tool=new_tool, extra={"attempt": step.attempts})
             result = self.act(step, context)
-            if self.verify(step, result):
+            if self.verify(step, result, context=context):
                 return True
 
         # Exceeded max retries
         step.status = StepStatus.BLOCKED
         context.requires_human_input = True
         context.blocker_reason = (
-            f"Step '{step.title}' failed after {MAX_DIAGNOSE_RETRIES} attempts. "
+            f"Step '{step.title}' failed after {step.attempts} attempts. "
             f"Last error: {step.error_message}. Escalating to user."
         )
+        self._record_event(context, "step_blocked", step_id=step.id, extra={"attempts": step.attempts, "error": step.error_message})
         self.voice.speak("Step failed multiple times. User review required.")
         return False
 
@@ -301,10 +908,15 @@ class ZaraEngine:
         approach = f"Executed {total_steps} planned steps with rigorous automated verification."
         if context.diagnoses:
             approach += f" Encountered and addressed {len(context.diagnoses)} intermediate errors."
+        if context.sources:
+            approach += f" Researched {len(context.sources)} web sources with prompt-injection filtering."
 
         if context.is_completed:
             result = f"All {total_steps} steps passed verification criteria."
-            lesson = f"Completed '{context.task}' cleanly. Verifying discrete units prevented regression."
+            if context.sources and context.evidence:
+                lesson = f"Synthesized research on '{context.task[:60]}' with {len(context.evidence)} verified claims."
+            else:
+                lesson = f"Completed '{context.task}' cleanly. Verifying discrete units prevented regression."
         else:
             result = f"Stopped due to blocker: {context.blocker_reason}"
             lesson = f"Task '{context.task}' required human escalation; check dependencies or credentials."
@@ -338,22 +950,103 @@ class ZaraEngine:
         # 2. PLAN
         self.plan(context, custom_steps=steps)
 
+        # If planning produced no steps (e.g. invalid plan refused shell execution)
+        if not context.steps:
+            context.is_completed = False
+            reflection = self.reflect(context)
+            self.persist(reflection)
+            self._record_event(context, "task_failed", extra={"reason": context.blocker_reason})
+            return {
+                "task": context.task,
+                "status": "BLOCKED",
+                "steps_total": 0,
+                "steps_passed": 0,
+                "steps_skipped": 0,
+                "steps_failed": 0,
+                "blocker_reason": context.blocker_reason or "No valid plan generated",
+                "reflection": reflection.to_markdown(),
+                "past_lessons_used": len(context.past_lessons),
+                "total_retries": 0,
+                "events_count": len(context.events)
+            }
+
         # Step 3 -> 4 -> 5 Loop
         for i, step in enumerate(context.steps):
             context.current_step_index = i
+
+            # Check execution time budget
+            elapsed = time.time() - context.start_time
+            if elapsed > self.max_execution_time_seconds:
+                step.status = StepStatus.SKIPPED
+                step.failure_type = FailureType.TIMEOUT.value
+                context.is_completed = False
+                context.requires_human_input = True
+                context.blocker_reason = f"Task execution time exceeded limit ({elapsed:.1f}s > {self.max_execution_time_seconds}s)."
+                self._record_event(context, "task_timeout", extra={"elapsed": elapsed})
+                break
+
+            # Check step dependencies
+            prereq_failed = False
+            failed_dep_id = None
+            if step.dependencies:
+                for dep_id in step.dependencies:
+                    dep_step = next((s for s in context.steps if s.id == dep_id), None)
+                    if not dep_step or dep_step.status != StepStatus.PASSED:
+                        prereq_failed = True
+                        failed_dep_id = dep_id
+                        break
+
+            if prereq_failed:
+                step.status = StepStatus.SKIPPED
+                step.failure_type = FailureType.DEPENDENCY_FAILURE.value
+                step.error_message = f"Dependency step {failed_dep_id} did not pass verification."
+                self._record_event(
+                    context,
+                    "step_skipped",
+                    step_id=step.id,
+                    status="skipped",
+                    extra={"failed_dependency": failed_dep_id}
+                )
+                continue
+
             result = self.act(step, context)
 
-            is_verified = self.verify(step, result)
+            is_verified = self.verify(step, result, context=context)
             if not is_verified:
                 success_after_retry = self.diagnose_and_retry(step, result, context)
                 if not success_after_retry:
+                    # Mark all downstream steps that depend on the failed step as skipped
+                    for remaining_step in context.steps[i + 1:]:
+                        if step.id in remaining_step.dependencies or any(
+                            s.id in remaining_step.dependencies and s.status == StepStatus.SKIPPED
+                            for s in context.steps
+                        ):
+                            remaining_step.status = StepStatus.SKIPPED
+                            remaining_step.failure_type = FailureType.DEPENDENCY_FAILURE.value
+                            remaining_step.error_message = f"Prerequisite step {step.id} failed."
+                            self._record_event(
+                                context,
+                                "step_skipped",
+                                step_id=remaining_step.id,
+                                status="skipped",
+                                extra={"failed_dependency": step.id}
+                            )
                     break
 
             # Save checkpoint after each verified step for crash recovery
             self.recovery.save_checkpoint(context)
 
         # Check completion
-        context.is_completed = all(s.status == StepStatus.PASSED for s in context.steps)
+        context.is_completed = bool(context.steps) and all(s.status == StepStatus.PASSED for s in context.steps)
+
+        if context.is_completed:
+            self._record_event(context, "task_completed", status="success")
+        else:
+            self._record_event(context, "task_failed", status="failed", extra={"reason": context.blocker_reason})
+
+        # Research Report Synthesis if research occurred
+        if (context.sources or "research" in context.task.lower()) and not context.research_report:
+            self.research.synthesize_report(context.task, context)
 
         # 6. REFLECT
         reflection = self.reflect(context)
@@ -370,9 +1063,17 @@ class ZaraEngine:
             "status": "COMPLETED" if context.is_completed else "BLOCKED",
             "steps_total": len(context.steps),
             "steps_passed": sum(1 for s in context.steps if s.status == StepStatus.PASSED),
+            "steps_skipped": sum(1 for s in context.steps if s.status == StepStatus.SKIPPED),
+            "steps_failed": sum(1 for s in context.steps if s.status in (StepStatus.FAILED, StepStatus.BLOCKED)),
             "blocker_reason": context.blocker_reason,
             "reflection": reflection.to_markdown(),
-            "past_lessons_used": len(context.past_lessons)
+            "past_lessons_used": len(context.past_lessons),
+            "total_retries": context.total_retries,
+            "events_count": len(context.events),
+            "diff_summary": context.get_diff_summary(),
+            "research_report": context.research_report.to_markdown() if context.research_report else None,
+            "sources_count": len(context.sources),
+            "evidence_count": len(context.evidence)
         }
 
         if context.is_completed:
