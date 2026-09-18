@@ -177,6 +177,22 @@
         </div>
       </section>
 
+      <!-- Multi-Agent Workers Panel (Phase 15) -->
+      <section class="card panel-workers">
+        <div class="card-header">
+          <h3>Multi-Agent Workstreams</h3>
+          <span id="workers-count-badge" class="tag tag-dim">0 Active</span>
+        </div>
+        <div class="card-body">
+          <div id="workers-list" class="workers-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
+            <div class="empty-placeholder" style="font-size: 12px; color: #888;">No active workers.</div>
+          </div>
+          <div id="worker-locks-summary" style="margin-top: 8px; font-size: 11px; color: #aaa;">
+            Active Resource Locks: <span id="active-locks-count">0</span>
+          </div>
+        </div>
+      </section>
+
       <!-- Tool & Terminal Execution Stream -->
       <section class="card panel-terminal">
         <div class="card-header">

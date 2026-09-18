@@ -31,6 +31,8 @@ from modules.events import Event, EventType, EventBus
 from modules.workspace import ProjectManager, discover_projects
 from modules.goals import Goal, GoalDomain
 from modules.planning import HierarchicalPlanner, PlanValidator
+from modules.workers import WorkerStatus
+from modules.resource_locking import ResourceType
 from core.observability import audit_logger
 
 
@@ -787,5 +789,99 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
             elif hasattr(eng.voice, "stop"):
                 eng.voice.stop()
         return {"success": True, "status": "INTERRUPTED", "voice_speaking": False}
+    # ──────────────────────────────────────────────────────────────────────────
+    # REST API: Multi-Agent & Parallel Worker Controls (Phase 15)
+    # ──────────────────────────────────────────────────────────────────────────
+    @app.get("/api/workers")
+    async def get_workers(project: Optional[str] = None, status: Optional[str] = None):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "workstream_orchestrator") or not eng.workstream_orchestrator:
+            return {"workers": [], "metrics": {}}
+
+        st_filter = None
+        if status:
+            try:
+                st_filter = WorkerStatus(status.lower())
+            except Exception:
+                pass
+
+        workers = eng.workstream_orchestrator.list_workers(project_id=project, status=st_filter)
+        metrics = eng.workstream_orchestrator.get_metrics()
+        return redact_sensitive_data({
+            "workers": [w.to_dict() for w in workers],
+            "metrics": metrics
+        })
+
+    @app.get("/api/workers/locks")
+    async def get_worker_locks():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "resource_manager") or not eng.resource_manager:
+            return {"locks": [], "count": 0}
+
+        locks = eng.resource_manager.get_locks()
+        return redact_sensitive_data({
+            "locks": [l.to_dict() for l in locks],
+            "count": len(locks)
+        })
+
+    @app.get("/api/workers/graph")
+    async def get_workers_graph():
+        eng: ZaraEngine = app.state.engine
+        tasks = []
+        if eng.project_manager and hasattr(eng.project_manager, "dag") and eng.project_manager.dag:
+            tasks = [t.to_dict() for t in eng.project_manager.dag.list_tasks()]
+        workers = []
+        if hasattr(eng, "workstream_orchestrator") and eng.workstream_orchestrator:
+            workers = [w.to_dict() for w in eng.workstream_orchestrator.list_workers()]
+
+        return redact_sensitive_data({
+            "tasks": tasks,
+            "workers": workers,
+            "edges": [{"from": dep, "to": t["id"]} for t in tasks for dep in t.get("dependencies", [])]
+        })
+
+    @app.get("/api/workers/{worker_id}")
+    async def get_worker_detail(worker_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "workstream_orchestrator") or not eng.workstream_orchestrator:
+            raise HTTPException(status_code=503, detail="Orchestrator offline")
+
+        worker = eng.workstream_orchestrator.get_worker(worker_id)
+        if not worker:
+            raise HTTPException(status_code=404, detail="Worker not found")
+        return redact_sensitive_data({"worker": worker.to_dict()})
+
+    @app.post("/api/workers/{worker_id}/pause")
+    async def pause_worker(worker_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "workstream_orchestrator") or not eng.workstream_orchestrator:
+            raise HTTPException(status_code=503, detail="Orchestrator offline")
+
+        ok = eng.workstream_orchestrator.pause_worker(worker_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Worker not found or not active")
+        return {"status": "PAUSED", "worker_id": worker_id}
+
+    @app.post("/api/workers/{worker_id}/resume")
+    async def resume_worker(worker_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "workstream_orchestrator") or not eng.workstream_orchestrator:
+            raise HTTPException(status_code=503, detail="Orchestrator offline")
+
+        ok = eng.workstream_orchestrator.resume_worker(worker_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Worker not found or not paused")
+        return {"status": "RESUMED", "worker_id": worker_id}
+
+    @app.post("/api/workers/{worker_id}/cancel")
+    async def cancel_worker(worker_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "workstream_orchestrator") or not eng.workstream_orchestrator:
+            raise HTTPException(status_code=503, detail="Orchestrator offline")
+
+        ok = eng.workstream_orchestrator.cancel_worker(worker_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Worker not found")
+        return {"status": "CANCELLED", "worker_id": worker_id}
 
     return app

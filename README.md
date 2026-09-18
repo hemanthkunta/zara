@@ -132,6 +132,29 @@ Start an interactive chat session with ZARA:
 ./zara.py memory --export memory_backup.json
 ```
 
+### Multi-Agent & Workstream Orchestration (Phase 15)
+```bash
+# View summary of worker pools, active locks & success rate
+./zara.py workers status
+
+# List all registered workers across projects
+./zara.py workers list
+
+# Filter workers by status or project
+./zara.py workers list --status running --project project-alpha
+
+# Inspect active resource locks (Filesystem, GUI, Ports, etc.)
+./zara.py workers locks
+
+# Inspect details and budgets of a specific worker
+./zara.py workers inspect wkr_12345678
+
+# Pause, resume, or cancel a worker
+./zara.py workers pause wkr_12345678
+./zara.py workers resume wkr_12345678
+./zara.py workers cancel wkr_12345678
+```
+
 ### Inspect Task Recovery Checkpoints
 ```bash
 ./zara.py recover
@@ -190,6 +213,8 @@ Start an interactive chat session with ZARA:
 │   ├── terminal.py              # Sandboxed command and test runner tools
 │   └── macos_control.py         # macOS notifications, clipboard, screenshots
 ├── modules/
+│   ├── resource_locking.py      # Granular resource lock manager (Phase 15)
+│   ├── workers.py               # Delegated worker profiles & workstream orchestrator (Phase 15)
 │   ├── coding.py                # AST analysis, diff calculation & file operations
 │   ├── debugging.py             # Traceback parsing, hypothesis builder & patcher
 │   ├── execution.py             # Layered process runner (Request->Policy->Sandbox->Exec)
@@ -207,7 +232,7 @@ Start an interactive chat session with ZARA:
 │   └── orchestrator.py          # Multi-task queue state manager
 ├── gui/
 │   └── app.py                   # Desktop GUI with state machine visualization
-├── ui/                          # Unified Command Center & Control UI (Phase 13/14)
+├── ui/                          # Unified Command Center & Control UI (Phase 13/14/15)
 ├── memory/
 │   ├── zara_log.md              # Human-readable append-only lessons
 │   ├── episodes.jsonl           # Structured episodic memory
@@ -219,7 +244,8 @@ Start an interactive chat session with ZARA:
 │   └── task_queue.json          # Multi-task orchestrator status store
 ├── logs/
 │   ├── audit.jsonl              # Structured audit log
-│   └── zara.log                 # System log
+│   ├── zara.log                 # System log
+│   └── workers/                 # Worker execution logs & JSON state (Phase 15)
 ├── checkpoints/                 # Task recovery state checkpoints
 └── tests/
     ├── test_zara_core.py        # Core loop and integration tests
@@ -228,5 +254,8 @@ Start an interactive chat session with ZARA:
     ├── test_specialized_modules.py # Git, Blender, Research, Recovery, Security tests
     ├── test_memory_advanced.py  # Phase 14 memory CRUD, decay & conflicts
     ├── test_memory_scoping.py   # Phase 14 scoping, isolation & privacy
-    └── test_memory_integration.py # Phase 14 full-system integration tests
+    ├── test_memory_integration.py # Phase 14 full-system integration tests
+    ├── test_workers_core.py     # Phase 15 worker state, types, budgets & lifecycles
+    ├── test_resource_locking.py # Phase 15 granular resource manager & contention
+    └── test_parallel_orchestration.py # Phase 15 parallel DAG execution, UI & CLI
 ```

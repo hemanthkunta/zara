@@ -583,6 +583,48 @@
     });
   }
 
+  // Worker fetcher (Phase 15)
+  const fetchWorkers = async () => {
+    try {
+      const res = await fetch("/api/workers");
+      if (!res.ok) return;
+      const data = await res.json();
+      const workers = data.workers || [];
+      const metrics = data.metrics || {};
+
+      const countBadge = document.getElementById("workers-count-badge");
+      if (countBadge) {
+        countBadge.textContent = `${metrics.active_workers || 0} Active`;
+        countBadge.className = metrics.active_workers > 0 ? "tag tag-success" : "tag tag-dim";
+      }
+
+      const locksSummary = document.getElementById("active-locks-count");
+      if (locksSummary) {
+        locksSummary.textContent = metrics.active_locks || 0;
+      }
+
+      const workersList = document.getElementById("workers-list");
+      if (workersList) {
+        if (workers.length === 0) {
+          workersList.innerHTML = '<div class="empty-placeholder" style="font-size: 12px; color: #888;">No active workers.</div>';
+        } else {
+          workersList.innerHTML = workers.slice(0, 6).map(w => {
+            const statusClass = w.status === "running" ? "tag-success" : (w.status === "completed" ? "tag-info" : (w.status === "failed" ? "tag-danger" : "tag-dim"));
+            return `<div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 6px; background: rgba(255,255,255,0.03); border-radius: 4px;">
+              <div>
+                <span style="font-weight: 600; font-size: 11px;">${escapeHtml(w.worker_type.toUpperCase())}</span>
+                <span style="font-size: 10px; color: #888; margin-left: 4px;">${escapeHtml(w.worker_id)}</span>
+              </div>
+              <span class="tag ${statusClass}" style="font-size: 9px;">${escapeHtml(w.status.toUpperCase())}</span>
+            </div>`;
+          }).join("");
+        }
+      }
+    } catch (err) {
+      console.error("fetchWorkers failed:", err);
+    }
+  };
+
   // Initial Boot
   connectWebSocket();
   fetchStatus();
@@ -590,10 +632,12 @@
   fetchTasks();
   fetchProject();
   fetchMemory();
+  fetchWorkers();
 
   // Periodic status poll (every 5 seconds)
   setInterval(() => {
     fetchStatus();
     fetchMemory();
+    fetchWorkers();
   }, 5000);
 })();

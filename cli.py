@@ -756,6 +756,118 @@ def cmd_ui(args):
     app = create_ui_app()
     uvicorn.run(app, host=host, port=port, log_level="info")
 
+def cmd_workers(args):
+    """Inspect and manage multi-agent parallel workers and resource locks (Phase 15)."""
+    from modules.workers import WorkstreamOrchestrator, WorkerStatus
+    from modules.resource_locking import ResourceManager
+
+    action = getattr(args, "workers_action", None) or "status"
+    engine = ZaraEngine()
+
+    try:
+        orch = engine.workstream_orchestrator
+        rm = engine.resource_manager
+
+        if action == "status":
+            metrics = orch.get_metrics()
+            print(f"\n{Colors.BOLD}=== ZARA MULTI-AGENT WORKERS ==={Colors.END}")
+            print(f"Total Workers:       {metrics['total_workers']}")
+            print(f"Active (Running):    {Colors.GREEN}{metrics['active_workers']}{Colors.END}")
+            print(f"Completed:           {Colors.CYAN}{metrics['completed_workers']}{Colors.END}")
+            print(f"Failed:              {Colors.RED}{metrics['failed_workers']}{Colors.END}")
+            print(f"Waiting / Blocked:   {Colors.YELLOW}{metrics['waiting_workers']}{Colors.END}")
+            print(f"Active Locks:        {metrics['active_locks']}")
+            print(f"Concurrency Limit:   {metrics['max_concurrency_limit']}")
+            print(f"Success Rate:        {int(metrics['success_rate'] * 100)}%\n")
+
+        elif action == "list":
+            st_filter = None
+            if getattr(args, "status", None):
+                try:
+                    st_filter = WorkerStatus(args.status.lower())
+                except Exception:
+                    pass
+            workers = orch.list_workers(
+                project_id=getattr(args, "project", None),
+                status=st_filter
+            )
+            print(f"\n{Colors.BOLD}=== REGISTERED WORKERS ({len(workers)}) ==={Colors.END}")
+            if not workers:
+                print("No registered workers found.")
+            for w in workers:
+                st_color = Colors.GREEN if w.status == WorkerStatus.COMPLETED else (
+                    Colors.YELLOW if w.status == WorkerStatus.RUNNING else (
+                        Colors.RED if w.status == WorkerStatus.FAILED else Colors.CYAN
+                    )
+                )
+                print(f"[{w.worker_id}] {w.worker_type.value.upper():<12} | Status: {st_color}{w.status.value.upper()}{Colors.END} | Task: {w.task_id}")
+            print()
+
+        elif action == "inspect":
+            wid = getattr(args, "worker_id", "")
+            w = orch.get_worker(wid)
+            if not w:
+                print(f"{Colors.RED}Worker '{wid}' not found.{Colors.END}")
+                return
+            print(f"\n{Colors.BOLD}=== WORKER: {w.worker_id} ==={Colors.END}")
+            print(f"Type:         {w.worker_type.value}")
+            print(f"Task ID:      {w.task_id}")
+            print(f"Project ID:   {w.project_id}")
+            print(f"Status:       {w.status.value}")
+            print(f"Capabilities: {', '.join(w.capabilities)}")
+            print(f"Created:      {w.created_at}")
+            print(f"Started:      {w.started_at or 'N/A'}")
+            print(f"Completed:    {w.completed_at or 'N/A'}")
+            print(f"Error:        {w.error or 'None'}")
+            print(f"Budget:       runtime: {w.budget.current_runtime:.1f}s / {w.budget.max_runtime:.1f}s, tool calls: {w.budget.current_tool_calls} / {w.budget.max_tool_calls}")
+            print()
+
+        elif action == "pause":
+            wid = getattr(args, "worker_id", "")
+            ok = orch.pause_worker(wid)
+            if ok:
+                print(f"{Colors.GREEN}Worker '{wid}' paused.{Colors.END}")
+            else:
+                print(f"{Colors.RED}Failed to pause worker '{wid}' (not found or not active).{Colors.END}")
+
+        elif action == "resume":
+            wid = getattr(args, "worker_id", "")
+            ok = orch.resume_worker(wid)
+            if ok:
+                print(f"{Colors.GREEN}Worker '{wid}' resumed.{Colors.END}")
+            else:
+                print(f"{Colors.RED}Failed to resume worker '{wid}' (not found or not paused).{Colors.END}")
+
+        elif action == "cancel":
+            wid = getattr(args, "worker_id", "")
+            ok = orch.cancel_worker(wid)
+            if ok:
+                print(f"{Colors.GREEN}Worker '{wid}' cancelled and locks released.{Colors.END}")
+            else:
+                print(f"{Colors.RED}Failed to cancel worker '{wid}' (not found).{Colors.END}")
+
+        elif action == "locks":
+            locks = rm.get_locks()
+            print(f"\n{Colors.BOLD}=== ACTIVE RESOURCE LOCKS ({len(locks)}) ==={Colors.END}")
+            if not locks:
+                print("No active resource locks.")
+            for l in locks:
+                print(f"[{l.lock_id}] {l.resource_type.value.upper()}: {l.resource_target} | Mode: {l.mode.value.upper()} | Worker: {l.worker_id}")
+            print()
+
+        elif action == "graph":
+            print(f"\n{Colors.BOLD}=== WORKSTREAM TASK DAG ==={Colors.END}")
+            if engine.project_manager and hasattr(engine.project_manager, "dag") and engine.project_manager.dag:
+                tasks = engine.project_manager.dag.list_tasks()
+                for t in tasks:
+                    deps = f"<- ({', '.join(t.dependencies)})" if t.dependencies else "(root)"
+                    print(f"Task {t.id} [{t.capability.upper()}]: {t.title} {deps}")
+            else:
+                print("No persistent DAG loaded in current workspace.")
+            print()
+    finally:
+        engine.close()
+
 def main():
     parser = argparse.ArgumentParser(description="ZARA Autonomous Agent CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -909,6 +1021,30 @@ def main():
     ui_p.add_argument("--host", type=str, default=UI_HOST, help="Host interface to bind (default 127.0.0.1)")
     ui_p.add_argument("--open", action="store_true", help="Automatically open Command Center UI in web browser")
 
+    # workers command (Phase 15)
+    workers_p = subparsers.add_parser("workers", help="Inspect and control multi-agent parallel workers and locks")
+    workers_sub = workers_p.add_subparsers(dest="workers_action", help="Worker operations")
+
+    wk_status = workers_sub.add_parser("status", help="Show worker metrics and active status")
+    wk_list = workers_sub.add_parser("list", help="List all registered workers")
+    wk_list.add_argument("--project", type=str, default=None, help="Filter by project ID")
+    wk_list.add_argument("--status", type=str, default=None, help="Filter by worker status")
+
+    wk_inspect = workers_sub.add_parser("inspect", help="Inspect detailed worker state")
+    wk_inspect.add_argument("worker_id", type=str, help="Worker ID to inspect")
+
+    wk_pause = workers_sub.add_parser("pause", help="Pause an active worker")
+    wk_pause.add_argument("worker_id", type=str, help="Worker ID to pause")
+
+    wk_resume = workers_sub.add_parser("resume", help="Resume a paused worker")
+    wk_resume.add_argument("worker_id", type=str, help="Worker ID to resume")
+
+    wk_cancel = workers_sub.add_parser("cancel", help="Cancel a worker and release locks")
+    wk_cancel.add_argument("worker_id", type=str, help="Worker ID to cancel")
+
+    wk_locks = workers_sub.add_parser("locks", help="List active resource locks")
+    wk_graph = workers_sub.add_parser("graph", help="Display workstream task DAG")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -937,7 +1073,8 @@ def main():
         "plan": cmd_plan,
         "decisions": cmd_decisions,
         "world": cmd_world,
-        "ui": cmd_ui
+        "ui": cmd_ui,
+        "workers": cmd_workers
     }
     commands[args.command](args)
 

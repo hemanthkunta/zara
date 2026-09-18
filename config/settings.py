@@ -145,3 +145,14 @@ UI_DIR = BASE_DIR / "ui"
 UI_STATIC_DIR = UI_DIR / "static"
 UI_STATIC_DIR.mkdir(parents=True, exist_ok=True)
 UI_ENABLE_CORS = False
+
+# Phase 15: Multi-Agent & Parallel Execution Parameters
+MAX_PARALLEL_WORKERS = int(os.getenv("ZARA_MAX_PARALLEL_WORKERS", "4"))
+MAX_WORKERS_PER_PROJECT = int(os.getenv("ZARA_MAX_WORKERS_PER_PROJECT", "4"))
+MAX_PARALLEL_TOOL_CALLS = int(os.getenv("ZARA_MAX_PARALLEL_TOOL_CALLS", "8"))
+MAX_PARALLEL_NETWORK_OPERATIONS = int(os.getenv("ZARA_MAX_PARALLEL_NETWORK_OPS", "4"))
+MAX_PARALLEL_GUI_OPERATIONS = int(os.getenv("ZARA_MAX_PARALLEL_GUI_OPS", "1"))
+WORKER_LOCK_TIMEOUT_SECONDS = float(os.getenv("ZARA_WORKER_LOCK_TIMEOUT", "30.0"))
+WORKERS_DIR = LOGS_DIR / "workers"
+WORKERS_DIR.mkdir(parents=True, exist_ok=True)
+

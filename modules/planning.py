@@ -470,6 +470,21 @@ class HierarchicalPlanner:
 
         return tasks
 
+    @staticmethod
+    def infer_task_resources(task: PersistentTask) -> List[Dict[str, Any]]:
+        """Identify resources required by a task for safe parallel execution."""
+        resources = []
+        if task.artifacts:
+            for art in task.artifacts:
+                resources.append({"type": "filesystem", "target": art, "mode": "exclusive"})
+        cap = (task.capability or "").lower()
+        if "cyber" in cap:
+            target = task.input_payload.get("target") or "localhost"
+            resources.append({"type": "cyber_target", "target": str(target), "mode": "exclusive"})
+        if "vision" in cap and ("mouse" in task.title.lower() or "gui" in task.title.lower()):
+            resources.append({"type": "screen", "target": "gui:primary", "mode": "exclusive"})
+        return resources
+
 
 class PlanPreview:
     """Generates human-readable, auditable plan previews without exposing chain-of-thought."""

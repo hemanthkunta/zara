@@ -50,6 +50,18 @@ class EventType(str, Enum):
     MEMORY_UPDATED = "memory_updated"
     MEMORY_CONFLICT = "memory_conflict"
     MEMORY_DELETED = "memory_deleted"
+    WORKER_CREATED = "worker_created"
+    WORKER_STARTED = "worker_started"
+    WORKER_WAITING = "worker_waiting"
+    WORKER_BLOCKED = "worker_blocked"
+    WORKER_COMPLETED = "worker_completed"
+    WORKER_FAILED = "worker_failed"
+    WORKER_CANCELLED = "worker_cancelled"
+    WORKER_RETRYING = "worker_retrying"
+    WORKER_RESOURCE_LOCKED = "worker_resource_locked"
+    WORKER_RESOURCE_RELEASED = "worker_resource_released"
+    PARALLEL_BATCH_STARTED = "parallel_batch_started"
+    PARALLEL_BATCH_COMPLETED = "parallel_batch_completed"
     CUSTOM = "custom"
 
 

@@ -126,8 +126,10 @@ from modules.planning import (
 )
 from modules.replanning import AdaptiveReplanner, PlanVersion, PlanningFailureType
 from modules.context import ContextManager, ContextCompactor, CompactSummary
-from modules.workspace import PersistentTask
+from modules.workspace import PersistentTask, PersistentDAG
 from modules.world_model import WorldModel, Modality, Observation, TemporalStatus, WorldState
+from modules.resource_locking import ResourceManager, ResourceType, AccessMode
+from modules.workers import WorkstreamOrchestrator, WorkerStatus, Worker, WorkerResult
 
 class ZaraEngine:
     def __init__(
@@ -201,6 +203,14 @@ class ZaraEngine:
 
         # Phase 12: Multimodal Perception & Unified World Model
         self.world_model = world_model or WorldModel(workspace_root=str(self.workspace_root), event_bus=self.event_bus)
+
+        # Phase 15: Multi-Agent & Parallel Workstream Orchestration
+        self.resource_manager = ResourceManager()
+        self.workstream_orchestrator = WorkstreamOrchestrator(
+            engine=self,
+            resource_manager=self.resource_manager,
+            event_bus=self.event_bus
+        )
 
         # Initialize Tool Registry
         self.tools = ToolRegistry()
@@ -1787,8 +1797,38 @@ class ZaraEngine:
             "budget": self.autonomous.budget.to_dict()
         }
 
+    def execute_plan_parallel(
+        self,
+        tasks: List[PersistentTask],
+        project_id: Optional[str] = None,
+        dag: Optional[PersistentDAG] = None
+    ) -> Dict[str, Any]:
+        """Execute independent plan tasks in parallel workstreams with resource locking and safety checks."""
+        proj_id = project_id or (self.project_manager.project.project_id if self.project_manager and self.project_manager.project else "proj-default")
+        if dag:
+            return self.workstream_orchestrator.run_dag_to_completion(dag, project_id=proj_id)
+        else:
+            res = self.workstream_orchestrator.execute_parallel_batch(tasks, project_id=proj_id)
+            all_passed = len(res) > 0 and all(r.status == WorkerStatus.COMPLETED for r in res.values())
+            return {
+                "status": "COMPLETED" if all_passed else "PARTIALLY_COMPLETED",
+                "tasks_total": len(tasks),
+                "tasks_passed": len([r for r in res.values() if r.status == WorkerStatus.COMPLETED]),
+                "results": {k: v.to_dict() for k, v in res.items()}
+            }
+
     def close(self) -> None:
-        """Cleanly close underlying memory store and resources."""
+        """Cleanly close underlying memory store, worker orchestrator, and resources."""
+        if hasattr(self, "workstream_orchestrator") and self.workstream_orchestrator:
+            try:
+                self.workstream_orchestrator.close()
+            except Exception:
+                pass
+        if hasattr(self, "resource_manager") and self.resource_manager:
+            try:
+                self.resource_manager.clear()
+            except Exception:
+                pass
         if hasattr(self, "memory") and hasattr(self.memory, "close"):
             self.memory.close()
 
