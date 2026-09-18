@@ -38,6 +38,18 @@ class MemoryStore:
                 "risk_tolerance": "moderate"
             }
             PREFERENCES_FILE.write_text(json.dumps(default_prefs, indent=2), encoding="utf-8")
+        self._sync_existing_entries_to_vector_store()
+
+    def _sync_existing_entries_to_vector_store(self) -> None:
+        """Ensure all text log entries are indexed into the semantic vector store."""
+        entries = self.get_all_entries()
+        for idx, entry in enumerate(entries):
+            doc_id = f"entry_{idx}"
+            self.vector_store.upsert_document(
+                doc_id=doc_id,
+                content=entry,
+                metadata={"index": idx}
+            )
 
     def append_reflection(self, reflection: Reflection) -> None:
         """Append a completed task reflection to the persistent log and semantic vector store."""
