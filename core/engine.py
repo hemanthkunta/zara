@@ -74,6 +74,7 @@ from modules.voice import VoiceSynthesizer
 from modules.security import SecurityModule, ScopeViolationError
 from modules.job_hunter import JobHunterModule
 from modules.orchestrator import TaskOrchestrator
+from modules.evaluation import EvaluationManager
 from modules.self_improvement import SelfImprovementEvaluator
 from modules.verification import VerificationEngine
 from modules.vision import VisionModule
@@ -191,7 +192,8 @@ class ZaraEngine:
         self.orchestrator = TaskOrchestrator()
         self.verification = VerificationEngine(self.workspace_root)
         self.recovery = RecoveryManager()
-        self.self_improvement = SelfImprovementEvaluator(self.memory)
+        self.evaluation_manager = EvaluationManager(memory_store=self.memory, event_bus=self.event_bus)
+        self.self_improvement = SelfImprovementEvaluator(self.memory, evaluation_manager=self.evaluation_manager)
         self.vision = VisionModule(self.brain)
         self.cyber_lab = CyberLabManager()
         self.blender = BlenderModule()
@@ -1840,6 +1842,11 @@ class ZaraEngine:
         if hasattr(self, "model_router") and self.model_router:
             try:
                 self.model_router.close()
+            except Exception:
+                pass
+        if hasattr(self, "evaluation_manager") and self.evaluation_manager:
+            try:
+                self.evaluation_manager.close()
             except Exception:
                 pass
         if hasattr(self, "memory") and hasattr(self.memory, "close"):

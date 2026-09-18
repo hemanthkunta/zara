@@ -57,7 +57,7 @@ Unlike open-ended prompts that assume success, ZARA operates on a strictly verif
 | **Verifiable Evidence** | `modules/verification.py` | Evidence collector storing SHA-256 output hashes, exit codes, and timestamps for every check. |
 | **Layered Sandbox** | `modules/execution.py` | `Request -> Policy -> Permission -> Sandbox -> Execution -> Audit`. Regex interceptor for destructive commands, Docker container isolation (`--network none`), memory/CPU limits. |
 | **Hierarchical Memory** | `modules/memory.py`, `modules/memory_extractor.py` | Phase 14 Advanced Memory: 12 structured memory categories, 5 scopes (Global, User, Project, Task, Session), strict cross-project isolation, hybrid vector + lexical retrieval, deduplication, conflict resolution, secret scrubbing, and temporal decay. |
-| **Self-Improvement** | `modules/self_improvement.py` | Evaluates completed tasks and proposes prompt, workflow, or tool refinements to human review queue. |
+| **Self-Improvement & Learning** | `modules/evaluation.py`, `modules/self_improvement.py` | Phase 17 Self-Improvement, Evaluation & Adaptive Optimization: Multi-dimensional evaluation (Correctness, Quality, Efficiency, Reliability, Safety, Satisfaction), strategy library with automated validation, regression-guarded improvement proposals, controlled A/B experiments, atomic rollback, and critical safety file blocklist. |
 | **Voice Interface** | `modules/voice.py` | Zero-dependency native macOS female TTS (`say -v Samantha`) with speech interruption, sanitization, and STT microphone adapter. |
 | **Conversational Mode** | `core/conversation.py` | Multi-turn conversational REPL (`./zara.py chat`) retaining task context across prompts. |
 | **macOS Automation** | `tools/macos_control.py` | Native desktop notifications (`osascript`), clipboard read/write (`pbcopy`/`pbpaste`), screenshot capture (`screencapture`). |
@@ -182,6 +182,41 @@ Start an interactive chat session with ZARA:
 ./zara.py models test mock
 ```
 
+### Self-Improvement, Evaluation & Learning (Phase 17)
+```bash
+# View learning status, evaluation counts, strategies, proposals, experiments
+./zara.py learning status
+
+# View aggregate learning and subsystem evaluation statistics
+./zara.py learning stats
+
+# List synthesized lessons learned from task executions
+./zara.py learning lessons
+
+# List strategy library with validation metrics and version counts
+./zara.py learning strategies
+
+# View improvement proposals (filterable by status or risk tier)
+./zara.py learning proposals
+./zara.py learning proposals --status proposed --risk medium
+
+# List active and completed controlled experiments (A/B testing)
+./zara.py learning experiments
+
+# Inspect recent multi-dimensional task evaluations
+./zara.py learning evaluations --recent 10
+
+# Inspect specific evaluation, proposal, strategy, or experiment
+./zara.py learning inspect eval-12345678
+
+# Review and approve/reject an improvement proposal
+./zara.py learning approve prop-12345678
+./zara.py learning reject prop-12345678 --reason "Safety risk"
+
+# Atomically roll back a deployed improvement version
+./zara.py learning rollback prop-12345678
+```
+
 ### Inspect Task Recovery Checkpoints
 ```bash
 ./zara.py recover
@@ -206,6 +241,7 @@ Start an interactive chat session with ZARA:
 - **Draft-Only Job Hunter**: Job applications are enqueued to `queue/job_applications/` for manual human approval. Automated submission is prohibited.
 - **Secret Scrubbing**: API keys, auth tokens, and passwords are automatically redacted from logs, events, and memory entries.
 - **Model Router Safety**: Tool-call safety ensures models propose actions without executing them; circuit breakers isolate failing providers, with strict offline mock fallback.
+- **Self-Improvement Safety Principle**: ZARA must NEVER autonomously rewrite its safety policies, authorization, confirmation gates, or secret redaction. Improvements attempting to modify critical system files (`modules/cyber_lab.py`, `config/security_scope.json`, `tools/registry.py`, `core/observability.py`) are strictly prohibited and permanently rejected (`CRITICAL_SYSTEM_MODIFICATION_PROHIBITED`). All code modifications must pass the full test suite before deployment and maintain instant atomic rollback capability.
 - **Bounded Retries**: Maximum 5 diagnostic attempts per step before escalating to human input.
 
 ---
@@ -241,6 +277,7 @@ Start an interactive chat session with ZARA:
 │   ├── terminal.py              # Sandboxed command and test runner tools
 │   └── macos_control.py         # macOS notifications, clipboard, screenshots
 ├── modules/
+│   ├── evaluation.py            # Self-improvement, task evaluation & learning pipeline (Phase 17)
 │   ├── model_router.py          # AI model router, capability discovery & circuit breakers (Phase 16)
 │   ├── resource_locking.py      # Granular resource lock manager (Phase 15)
 │   ├── workers.py               # Delegated worker profiles & workstream orchestrator (Phase 15)
@@ -261,7 +298,12 @@ Start an interactive chat session with ZARA:
 │   └── orchestrator.py          # Multi-task queue state manager
 ├── gui/
 │   └── app.py                   # Desktop GUI with state machine visualization
-├── ui/                          # Unified Command Center & Control UI (Phase 13/14/15/16)
+├── ui/                          # Unified Command Center & Control UI (Phase 13/14/15/16/17)
+├── learning/                    # Self-improvement & learning storage (Phase 17)
+│   ├── strategies.json          # Validated and candidate execution strategies
+│   ├── evaluations/             # Multi-dimensional task evaluations
+│   ├── experiments/             # A/B & shadow experiment records
+│   └── improvements/            # Versioned deployments for atomic rollback
 ├── memory/
 │   ├── zara_log.md              # Human-readable append-only lessons
 │   ├── episodes.jsonl           # Structured episodic memory
@@ -289,5 +331,8 @@ Start an interactive chat session with ZARA:
     ├── test_parallel_orchestration.py # Phase 15 parallel DAG execution, UI & CLI
     ├── test_model_router_core.py # Phase 16 model router, providers, retry & fallback
     ├── test_model_health_and_circuit.py # Phase 16 provider health tracking & circuit breaker
-    └── test_model_integration.py # Phase 16 worker routing, engine & UI integration
+    ├── test_model_integration.py # Phase 16 worker routing, engine & UI integration
+    ├── test_evaluation_core.py  # Phase 17 evaluation dimensions, criteria & learning candidates
+    ├── test_learning_strategies.py # Phase 17 strategy library, planner integration & subsystems
+    └── test_improvement_experiments.py # Phase 17 proposals, safety guards, experiments & rollback
 ```

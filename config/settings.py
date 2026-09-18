@@ -169,3 +169,29 @@ CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("ZARA_CIRCUIT_BREAKER_THRESHOL
 CIRCUIT_BREAKER_COOLDOWN_SECONDS = float(os.getenv("ZARA_CIRCUIT_BREAKER_COOLDOWN", "60.0"))
 MODELS_DISCOVERY_CACHE_FILE = CONFIG_DIR / "models_cache.json"
 
+# Phase 17: Self-Improvement, Evaluation & Learning Parameters
+LEARNING_ENABLED = os.getenv("ZARA_LEARNING_ENABLED", "true").lower() in ("true", "1", "yes")
+LEARNING_DIR = BASE_DIR / "learning"
+LEARNING_DIR.mkdir(parents=True, exist_ok=True)
+EVALUATIONS_DIR = LEARNING_DIR / "evaluations"
+EVALUATIONS_DIR.mkdir(parents=True, exist_ok=True)
+STRATEGIES_FILE = LEARNING_DIR / "strategies.json"
+EXPERIMENTS_DIR = LEARNING_DIR / "experiments"
+EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
+IMPROVEMENTS_DIR = LEARNING_DIR / "improvements"
+IMPROVEMENTS_DIR.mkdir(parents=True, exist_ok=True)
+STRATEGY_MIN_EVIDENCE_THRESHOLD = int(os.getenv("ZARA_STRATEGY_MIN_EVIDENCE", "3"))
+STRATEGY_VALIDATION_SUCCESS_RATE = float(os.getenv("ZARA_STRATEGY_VALIDATION_RATE", "0.80"))
+AUTO_TEST_LOW_RISK_IMPROVEMENTS = os.getenv("ZARA_AUTO_TEST_LOW_RISK", "true").lower() in ("true", "1", "yes")
+
+# Critical Safety Blocklist: Paths and components that cannot be modified by autonomous proposals
+CRITICAL_FILES_BLOCKLIST = {
+    "modules/cyber_lab.py",
+    "config/security_scope.json",
+    "tools/registry.py",
+    "core/observability.py",
+    "modules/security.py",
+    "config/settings.py",
+}
+
+

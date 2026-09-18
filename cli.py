@@ -947,6 +947,158 @@ def cmd_models(args):
     finally:
         engine.close()
 
+def cmd_learning(args):
+    from modules.evaluation import StrategyStatus, ProposalRisk, ProposalStatus, ExperimentStatus
+    action = getattr(args, "learning_action", "status") or "status"
+    engine = ZaraEngine(enable_voice=False)
+    eval_mgr = engine.evaluation_manager
+    try:
+        if action == "status":
+            stats = eval_mgr.get_stats()
+            print(f"\n{Colors.BOLD}=== ZARA SELF-IMPROVEMENT & LEARNING STATUS ==={Colors.END}")
+            print(f"Tasks Evaluated:         {stats.get('tasks_evaluated', 0)}")
+            print(f"Success Rate:            {stats.get('success_rate', 1.0) * 100:.1f}%")
+            print(f"Avg Overall Score:       {stats.get('average_overall_score', 0.0):.2f}")
+            print(f"Learning Candidates:     {stats.get('learning_candidates_count', 0)}")
+            print(f"Validated Strategies:    {stats.get('validated_strategies_count', 0)} / {stats.get('total_strategies_count', 0)}")
+            print(f"Pending Proposals:       {stats.get('pending_proposals_count', 0)}")
+            print(f"Active Experiments:      {stats.get('active_experiments_count', 0)}")
+            print(f"Deployed Versions:       {stats.get('deployed_versions_count', 0)}")
+            print(f"Rolled Back Versions:    {stats.get('rolled_back_count', 0)}")
+            print()
+
+        elif action == "stats":
+            stats = eval_mgr.get_stats()
+            print(f"\n{Colors.BOLD}=== AGGREGATE LEARNING METRICS ==={Colors.END}")
+            for k, v in stats.items():
+                print(f"  • {k.replace('_', ' ').title()}: {v}")
+            print()
+
+        elif action == "lessons":
+            cands = list(eval_mgr.learning_candidates.values())
+            ftype = getattr(args, "type", None)
+            if ftype:
+                cands = [c for c in cands if c.memory_type.upper() == ftype.upper()]
+            print(f"\n{Colors.BOLD}=== LEARNED LESSONS ({len(cands)}) ==={Colors.END}")
+            if not cands:
+                print("No lessons recorded.")
+            for c in cands[-15:]:
+                color = Colors.YELLOW if c.memory_type == "ERROR_PATTERN" else Colors.GREEN
+                print(f"  [{c.candidate_id}] {color}{c.memory_type}{Colors.END} (Conf: {c.confidence:.2f})")
+                print(f"    {c.lesson}")
+            print()
+
+        elif action == "strategies":
+            domain = getattr(args, "domain", None)
+            status_filter = getattr(args, "status", None)
+            st_enum = StrategyStatus(status_filter.upper()) if status_filter else None
+            strats = eval_mgr.strategy_registry.list_strategies(status=st_enum, domain=domain)
+            print(f"\n{Colors.BOLD}=== STRATEGY LIBRARY ({len(strats)}) ==={Colors.END}")
+            if not strats:
+                print("No strategies found.")
+            for s in strats:
+                tag = Colors.GREEN if s.status == StrategyStatus.VALIDATED else (Colors.YELLOW if s.status == StrategyStatus.EXPERIMENTAL else Colors.RED)
+                print(f"  [{s.strategy_id}] {Colors.BOLD}{s.name}{Colors.END} — {tag}{s.status.value}{Colors.END} (v{s.version})")
+                print(f"    {s.description}")
+                print(f"    Evidence: {s.evidence_count} | Success Rate: {s.success_rate * 100:.1f}% | Conf: {s.confidence:.2f}")
+            print()
+
+        elif action == "proposals":
+            props = list(eval_mgr.proposals.values())
+            risk_filter = getattr(args, "risk", None)
+            if risk_filter:
+                props = [p for p in props if p.risk.value.upper() == risk_filter.upper()]
+            print(f"\n{Colors.BOLD}=== IMPROVEMENT PROPOSALS ({len(props)}) ==={Colors.END}")
+            if not props:
+                print("No proposals found.")
+            for p in props:
+                rc = Colors.RED if p.risk in (ProposalRisk.HIGH, ProposalRisk.CRITICAL) else (Colors.YELLOW if p.risk == ProposalRisk.MEDIUM else Colors.GREEN)
+                print(f"  [{p.proposal_id}] {Colors.BOLD}{p.title}{Colors.END}")
+                print(f"    Risk: {rc}{p.risk.value}{Colors.END} | Status: {p.status.value} | Type: {p.change_type.value}")
+                print(f"    Benefit: {p.expected_benefit}")
+                if p.rejection_reason:
+                    print(f"    {Colors.RED}Rejection Reason: {p.rejection_reason}{Colors.END}")
+            print()
+
+        elif action == "experiments":
+            exps = list(eval_mgr.experiments.values())
+            print(f"\n{Colors.BOLD}=== ACTIVE & COMPLETED EXPERIMENTS ({len(exps)}) ==={Colors.END}")
+            if not exps:
+                print("No experiments found.")
+            for e in exps:
+                st_color = Colors.GREEN if e.status == ExperimentStatus.COMPLETED else (Colors.YELLOW if e.status == ExperimentStatus.RUNNING else Colors.RED)
+                print(f"  [{e.experiment_id}] {st_color}{e.status.value}{Colors.END} — {e.hypothesis}")
+                print(f"    Sample: {e.sample_size}/{e.target_sample_size}")
+                if e.metrics:
+                    print(f"    Metrics: {e.metrics}")
+            print()
+
+        elif action == "evaluations":
+            evals = list(eval_mgr.evaluations.values())
+            print(f"\n{Colors.BOLD}=== RECENT TASK EVALUATIONS ({len(evals)}) ==={Colors.END}")
+            if not evals:
+                print("No evaluations found.")
+            for ev in evals[-10:]:
+                res_color = Colors.GREEN if ev.task_success else Colors.RED
+                print(f"  [{ev.evaluation_id}] Task: {ev.task_id} — {res_color}{'SUCCESS' if ev.task_success else 'FAILED'}{Colors.END} (Score: {ev.overall_score:.2f})")
+                print(f"    Correctness: {ev.quality_score:.2f} | Efficiency: {ev.efficiency_score:.2f} | Reliability: {ev.reliability_score:.2f} | Safety: {ev.safety_score:.2f}")
+            print()
+
+        elif action == "inspect":
+            target_id = getattr(args, "id", None)
+            if not target_id:
+                print(f"{Colors.RED}Please provide an ID to inspect.{Colors.END}")
+                return
+            if target_id in eval_mgr.evaluations:
+                print(json.dumps(eval_mgr.evaluations[target_id].to_dict(), indent=2))
+            elif target_id in eval_mgr.proposals:
+                print(json.dumps(eval_mgr.proposals[target_id].to_dict(), indent=2))
+            elif target_id in eval_mgr.strategy_registry.strategies:
+                print(json.dumps(eval_mgr.strategy_registry.strategies[target_id].to_dict(), indent=2))
+            elif target_id in eval_mgr.experiments:
+                print(json.dumps(eval_mgr.experiments[target_id].to_dict(), indent=2))
+            elif target_id in eval_mgr.versions:
+                print(json.dumps(eval_mgr.versions[target_id].to_dict(), indent=2))
+            else:
+                print(f"{Colors.RED}Entity with ID '{target_id}' not found.{Colors.END}")
+
+        elif action == "approve":
+            target_id = getattr(args, "id", None)
+            if not target_id:
+                print(f"{Colors.RED}Please provide a proposal ID to approve.{Colors.END}")
+                return
+            ok = eval_mgr.approve_proposal(target_id, approved_by="cli_user")
+            if ok:
+                print(f"{Colors.GREEN}✔ Proposal '{target_id}' approved successfully.{Colors.END}")
+            else:
+                print(f"{Colors.RED}✘ Cannot approve proposal '{target_id}' (may be critical, already rejected, or not found).{Colors.END}")
+
+        elif action == "reject":
+            target_id = getattr(args, "id", None)
+            reason = getattr(args, "reason", "Rejected via CLI") or "Rejected via CLI"
+            if not target_id:
+                print(f"{Colors.RED}Please provide a proposal ID to reject.{Colors.END}")
+                return
+            ok = eval_mgr.reject_proposal(target_id, reason=reason)
+            if ok:
+                print(f"{Colors.YELLOW}Proposal '{target_id}' rejected.{Colors.END}")
+            else:
+                print(f"{Colors.RED}Proposal '{target_id}' not found.{Colors.END}")
+
+        elif action == "rollback":
+            target_id = getattr(args, "id", None)
+            if not target_id:
+                print(f"{Colors.RED}Please provide a version or proposal ID to rollback.{Colors.END}")
+                return
+            ok = eval_mgr.rollback(target_id)
+            if ok:
+                print(f"{Colors.GREEN}✔ Rollback for '{target_id}' completed successfully.{Colors.END}")
+            else:
+                print(f"{Colors.RED}✘ Rollback failed: target '{target_id}' not found.{Colors.END}")
+
+    finally:
+        engine.close()
+
 def main():
     parser = argparse.ArgumentParser(description="ZARA Autonomous Agent CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -1140,6 +1292,39 @@ def main():
     m_test = models_sub.add_parser("test", help="Test operational health of a provider")
     m_test.add_argument("provider", type=str, nargs="?", default="mock", help="Provider name to test (default: mock)")
 
+    # learning command (Phase 17)
+    learning_p = subparsers.add_parser("learning", help="Inspect and control self-improvement, strategies, and learning")
+    learning_sub = learning_p.add_subparsers(dest="learning_action", help="Learning operations")
+
+    learning_sub.add_parser("status", help="Show learning subsystem status, success rates, and counts")
+    learning_sub.add_parser("stats", help="Show aggregate learning metrics")
+
+    l_lessons = learning_sub.add_parser("lessons", help="List learned lesson candidates")
+    l_lessons.add_argument("--type", type=str, default=None, help="Filter by memory type (ERROR_PATTERN, SUCCESS_PATTERN, USER_FEEDBACK)")
+
+    l_strats = learning_sub.add_parser("strategies", help="List strategy library")
+    l_strats.add_argument("--domain", type=str, default=None, help="Filter by applicable domain")
+    l_strats.add_argument("--status", type=str, default=None, help="Filter by status (EXPERIMENTAL, VALIDATED, DEPRECATED, BLOCKED)")
+
+    l_props = learning_sub.add_parser("proposals", help="List improvement proposals")
+    l_props.add_argument("--risk", type=str, default=None, help="Filter by risk (LOW, MEDIUM, HIGH, CRITICAL)")
+
+    learning_sub.add_parser("experiments", help="List active and completed experiments")
+    learning_sub.add_parser("evaluations", help="List recent task evaluations")
+
+    l_inspect = learning_sub.add_parser("inspect", help="Inspect entity details (evaluation, proposal, strategy, experiment)")
+    l_inspect.add_argument("id", type=str, help="Entity ID to inspect")
+
+    l_approve = learning_sub.add_parser("approve", help="Approve an improvement proposal")
+    l_approve.add_argument("id", type=str, help="Proposal ID to approve")
+
+    l_reject = learning_sub.add_parser("reject", help="Reject an improvement proposal")
+    l_reject.add_argument("id", type=str, help="Proposal ID to reject")
+    l_reject.add_argument("--reason", type=str, default="Rejected via CLI", help="Rejection reason")
+
+    l_rollback = learning_sub.add_parser("rollback", help="Rollback an improvement proposal or version")
+    l_rollback.add_argument("id", type=str, help="Proposal or Version ID to rollback")
+
     args = parser.parse_args()
 
     # Default to chat if no command provided
@@ -1170,7 +1355,8 @@ def main():
         "world": cmd_world,
         "ui": cmd_ui,
         "workers": cmd_workers,
-        "models": cmd_models
+        "models": cmd_models,
+        "learning": cmd_learning
     }
     commands[args.command](args)
 

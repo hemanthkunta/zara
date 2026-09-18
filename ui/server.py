@@ -963,5 +963,99 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
         h = prov.health()
         return redact_sensitive_data({"success": h.get("available", False), "health": h})
 
+    # =========================================================================
+    # Phase 17: Self-Improvement, Evaluation & Learning Endpoints
+    # =========================================================================
+
+    @app.get("/api/learning/status")
+    async def get_learning_status():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {"status": "unavailable", "stats": {}}
+        return redact_sensitive_data(eng.evaluation_manager.get_status())
+
+    @app.get("/api/learning/stats")
+    async def get_learning_stats():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {}
+        return redact_sensitive_data(eng.evaluation_manager.get_stats())
+
+    @app.get("/api/learning/lessons")
+    async def get_learning_lessons():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {"lessons": []}
+        return redact_sensitive_data({
+            "lessons": [c.to_dict() for c in eng.evaluation_manager.learning_candidates.values()]
+        })
+
+    @app.get("/api/learning/strategies")
+    async def get_learning_strategies():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {"strategies": []}
+        return redact_sensitive_data({
+            "strategies": [s.to_dict() for s in eng.evaluation_manager.strategy_registry.strategies.values()]
+        })
+
+    @app.get("/api/learning/proposals")
+    async def get_learning_proposals():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {"proposals": []}
+        return redact_sensitive_data({
+            "proposals": [p.to_dict() for p in eng.evaluation_manager.proposals.values()]
+        })
+
+    @app.get("/api/learning/experiments")
+    async def get_learning_experiments():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {"experiments": []}
+        return redact_sensitive_data({
+            "experiments": [e.to_dict() for e in eng.evaluation_manager.experiments.values()]
+        })
+
+    @app.get("/api/learning/evaluations")
+    async def get_learning_evaluations():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {"evaluations": []}
+        return redact_sensitive_data({
+            "evaluations": [e.to_dict() for e in eng.evaluation_manager.evaluations.values()]
+        })
+
+    @app.post("/api/learning/proposals/{proposal_id}/approve")
+    async def approve_learning_proposal(proposal_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            raise HTTPException(status_code=503, detail="EvaluationManager offline")
+        ok = eng.evaluation_manager.approve_proposal(proposal_id, approved_by="ui_user")
+        if not ok:
+            raise HTTPException(status_code=400, detail="Cannot approve proposal (may be critical or rejected)")
+        return {"success": True, "proposal_id": proposal_id}
+
+    @app.post("/api/learning/proposals/{proposal_id}/reject")
+    async def reject_learning_proposal(proposal_id: str, payload: Optional[Dict[str, Any]] = None):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            raise HTTPException(status_code=503, detail="EvaluationManager offline")
+        reason = (payload or {}).get("reason", "Rejected via UI")
+        ok = eng.evaluation_manager.reject_proposal(proposal_id, reason=reason)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        return {"success": True, "proposal_id": proposal_id}
+
+    @app.post("/api/learning/rollback/{target_id}")
+    async def rollback_learning_proposal(target_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            raise HTTPException(status_code=503, detail="EvaluationManager offline")
+        ok = eng.evaluation_manager.rollback(target_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Target '{target_id}' not found for rollback")
+        return {"success": True, "target_id": target_id}
+
     return app
 

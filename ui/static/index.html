@@ -212,6 +212,27 @@
         </div>
       </section>
 
+      <!-- Self-Improvement & Learning Panel (Phase 17) -->
+      <section class="card panel-learning">
+        <div class="card-header">
+          <h3>Self-Improvement & Learning</h3>
+          <span id="learning-status-badge" class="tag tag-success">ACTIVE</span>
+        </div>
+        <div class="card-body">
+          <div class="learning-meta-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px; margin-bottom: 8px;">
+            <div><strong>Evaluated:</strong> <span id="learning-tasks-eval">0</span></div>
+            <div><strong>Success Rate:</strong> <span id="learning-success-rate">100%</span></div>
+            <div><strong>Avg Score:</strong> <span id="learning-avg-score">0.00</span></div>
+            <div><strong>Strategies:</strong> <span id="learning-valid-strats">0</span></div>
+            <div><strong>Proposals:</strong> <span id="learning-pending-props">0 pending</span></div>
+            <div><strong>Experiments:</strong> <span id="learning-active-exps">0 active</span></div>
+          </div>
+          <div id="learning-lessons-container" style="max-height: 100px; overflow-y: auto; font-size: 11px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 6px;">
+            <div class="empty-placeholder" style="color: #718096;">Loading recent lessons...</div>
+          </div>
+        </div>
+      </section>
+
       <!-- Tool & Terminal Execution Stream -->
       <section class="card panel-terminal">
         <div class="card-header">

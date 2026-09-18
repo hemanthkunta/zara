@@ -303,8 +303,9 @@ class HierarchicalPlanner:
         project_id: str,
         world_state: Optional[Any] = None,
         relevant_memories: Optional[List[Any]] = None,
+        validated_strategies: Optional[List[Any]] = None,
     ) -> List[PersistentTask]:
-        """Generate hierarchical DAG tasks tailored to the Goal domain, informed by World Model state and prior memories."""
+        """Generate hierarchical DAG tasks tailored to the Goal domain, informed by World Model state, prior memories, and validated strategies."""
         tasks: List[PersistentTask] = []
         domain = goal.domain
 
@@ -467,6 +468,16 @@ class HierarchicalPlanner:
                 if t.input_payload is None:
                     t.input_payload = {}
                 t.input_payload["memory_hints"] = memory_hints
+
+        if validated_strategies:
+            strat_hints = [
+                f"{s.name}: {', '.join(s.steps)}" if hasattr(s, "steps") and s.steps else (s.description if hasattr(s, "description") else str(s))
+                for s in validated_strategies
+            ]
+            for t in tasks:
+                if t.input_payload is None:
+                    t.input_payload = {}
+                t.input_payload["strategy_hints"] = strat_hints
 
         return tasks
 

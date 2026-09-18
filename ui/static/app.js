@@ -666,6 +666,48 @@
     }
   };
 
+  // Self-Improvement & Learning fetcher (Phase 17)
+  const fetchLearning = async () => {
+    try {
+      const res = await fetch("/api/learning/status");
+      if (!res.ok) return;
+      const data = await res.json();
+      const stats = data.stats || {};
+
+      const tasksElem = document.getElementById("learning-tasks-eval");
+      const rateElem = document.getElementById("learning-success-rate");
+      const scoreElem = document.getElementById("learning-avg-score");
+      const stratsElem = document.getElementById("learning-valid-strats");
+      const propsElem = document.getElementById("learning-pending-props");
+      const expsElem = document.getElementById("learning-active-exps");
+
+      if (tasksElem) tasksElem.textContent = stats.tasks_evaluated || 0;
+      if (rateElem) rateElem.textContent = `${Math.round((stats.success_rate || 1.0) * 100)}%`;
+      if (scoreElem) scoreElem.textContent = (stats.average_overall_score || 0.0).toFixed(2);
+      if (stratsElem) stratsElem.textContent = stats.validated_strategies_count || 0;
+      if (propsElem) propsElem.textContent = `${stats.pending_proposals_count || 0} pending`;
+      if (expsElem) expsElem.textContent = `${stats.active_experiments_count || 0} active`;
+
+      const lessonsContainer = document.getElementById("learning-lessons-container");
+      if (lessonsContainer && data.recent_lessons) {
+        if (data.recent_lessons.length === 0) {
+          lessonsContainer.innerHTML = `<div class="empty-placeholder" style="color: #718096;">No lessons recorded yet.</div>`;
+        } else {
+          lessonsContainer.innerHTML = data.recent_lessons.slice(-3).map(l => {
+            const mType = l.memory_type || "EXPERIENCE";
+            const tagClass = mType === "ERROR_PATTERN" ? "tag-warning" : "tag-success";
+            return `<div style="padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+              <span class="tag ${tagClass}" style="font-size: 8px;">${escapeHtml(mType)}</span>
+              <span style="font-size: 10px; color: #cbd5e0;">${escapeHtml(l.lesson || "")}</span>
+            </div>`;
+          }).join("");
+        }
+      }
+    } catch (err) {
+      console.error("fetchLearning failed:", err);
+    }
+  };
+
   // Initial Boot
   connectWebSocket();
   fetchStatus();
@@ -675,6 +717,7 @@
   fetchMemory();
   fetchWorkers();
   fetchModels();
+  fetchLearning();
 
   // Periodic status poll (every 5 seconds)
   setInterval(() => {
@@ -682,5 +725,6 @@
     fetchMemory();
     fetchWorkers();
     fetchModels();
+    fetchLearning();
   }, 5000);
 })();
