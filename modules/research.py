@@ -16,7 +16,7 @@ import json
 import re
 import datetime
 import time
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 
 from config.settings import (
     MAX_RESEARCH_QUERIES,

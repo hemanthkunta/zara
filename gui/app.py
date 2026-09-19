@@ -95,7 +95,8 @@ class ZaraDesktopApp:
         tab_pipeline = tk.Frame(notebook, bg="#181825")
         notebook.add(tab_pipeline, text="State Machine Loop")
         self.pipeline_display = scrolledtext.ScrolledText(tab_pipeline, bg="#11111b", fg="#a6adc8", font=("Monaco", 11))
-        self.pipeline_display.pack(fill=tk.BOTH, expand=True, pwheel=True if hasattr(scrolledtext, "pwheel") else 5)
+        # self.pipeline_display.pack(fill=tk.BOTH, expand=True, pwheel=True if hasattr(scrolledtext, "pwheel") else 5)
+        self.pipeline_display.pack(fill=tk.BOTH, expand=True)
 
         # Tab 2: Memory Log
         tab_memory = tk.Frame(notebook, bg="#181825")

@@ -7,7 +7,7 @@ import socket
 import urllib.request
 import ssl
 from pathlib import Path
-from typing import Tuple, Dict, Any, List
+from typing import Tuple, Dict, Any, List, Optional
 from config.settings import SECURITY_SCOPE_FILE
 from core.observability import audit_logger
 from modules.cyber_lab import CyberLabScope, CyberLabManager, ScopeViolationError
