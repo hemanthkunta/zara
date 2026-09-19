@@ -156,6 +156,21 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
     app.state.ws_manager = ConnectionManager()
     app.state.start_time = time.time()
 
+    app.state.cached_health_report = None
+    app.state.cached_health_time = 0.0
+
+    def _get_health_report(force: bool = False):
+        now = time.time()
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "health_service") or not eng.health_service:
+            return None
+        if not force and app.state.cached_health_report is not None and (now - app.state.cached_health_time < 3.0):
+            return app.state.cached_health_report
+        report = eng.health_service.check_all()
+        app.state.cached_health_report = report
+        app.state.cached_health_time = now
+        return report
+
     # Wire EventBus to WebSocket broadcast
     def _on_eventbus_event(evt: Event):
         if hasattr(app.state, "ws_manager") and app.state.ws_manager.active_connections:
@@ -232,10 +247,12 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
         metrics = get_system_metrics()
         auto_enabled = eng.autonomous.is_enabled() if hasattr(eng, "autonomous") and eng.autonomous else False
         voice_speaking = getattr(eng.voice, "is_speaking", False) if hasattr(eng, "voice") and eng.voice else False
+        health_rep = _get_health_report()
+        health_val = health_rep.overall.value if health_rep else "HEALTHY"
 
         return redact_sensitive_data({
             "status": "ONLINE",
-            "health": eng.health_service.check_all().overall.value if hasattr(eng, "health_service") and eng.health_service else "HEALTHY",
+            "health": health_val,
             "uptime_seconds": round(time.time() - app.state.start_time, 1),
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "cpu_percent": metrics["cpu_percent"],
@@ -257,9 +274,8 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
 
     @app.get("/api/health")
     async def get_health():
-        eng: ZaraEngine = app.state.engine
-        if hasattr(eng, "health_service") and eng.health_service:
-            report = eng.health_service.check_all()
+        report = _get_health_report()
+        if report:
             rep_dict = report.to_dict()
             c_map = {k.lower().replace(" ", "_"): v for k, v in report.components.items()}
             c_map.update(report.components)
