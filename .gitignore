@@ -66,3 +66,8 @@ queue/job_applications/draft_*.json
 backups/*.tar.gz
 backups/*.tmp*
 
+
+# ZARA local runtime and learning state
+logs/audit.jsonl
+memory/
+learning/
