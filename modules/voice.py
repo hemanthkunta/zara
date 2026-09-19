@@ -596,6 +596,11 @@ def summarize_for_voice(text: str, max_length: int = MAX_VOICE_SUMMARY_LENGTH) -
     if not text:
         return ""
 
+    # Sanitize database / SQLite internal errors
+    lower_text = text.lower()
+    if "operationalerror" in lower_text or "no such table" in lower_text or ("sqlite" in lower_text and "error" in lower_text):
+        return "I couldn't complete that request because the memory system needs repair."
+
     # Strip code blocks
     clean = re.sub(r"```.*?```", "code omitted", text, flags=re.DOTALL)
     # Strip inline code

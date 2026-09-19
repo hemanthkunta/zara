@@ -7,10 +7,13 @@ import os
 import re
 import json
 import time
+import logging
 import asyncio
 import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
+
+logger = logging.getLogger("zara.ui.server")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Response
 from fastapi.staticfiles import StaticFiles
@@ -593,32 +596,45 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
         """Execute a natural language task through the Master Orchestrator."""
         eng: ZaraEngine = app.state.engine
 
-        # Security check: prompt injection sanitization
-        clean_cmd = sanitize_xss(req.command.strip())
-        audit_logger.log_event("UI_COMMAND_SUBMITTED", {"command": clean_cmd, "tag": req.tag})
+        try:
+            # Security check: prompt injection sanitization
+            clean_cmd = sanitize_xss(req.command.strip())
+            audit_logger.log_event("UI_COMMAND_SUBMITTED", {"command": clean_cmd, "tag": req.tag})
 
-        # Run task through ZaraEngine
-        # Run synchronously in executor to avoid blocking event loop
-        loop = asyncio.get_event_loop()
-        summary = await loop.run_in_executor(
-            None,
-            lambda: eng.run_task(task=clean_cmd, tag=req.tag)
-        )
+            # Run task through ZaraEngine
+            # Run synchronously in executor to avoid blocking event loop
+            loop = asyncio.get_event_loop()
+            summary = await loop.run_in_executor(
+                None,
+                lambda: eng.run_task(task=clean_cmd, tag=req.tag)
+            )
 
-        # Broadcast task completion to UI
-        await app.state.ws_manager.broadcast({
-            "type": "task_completed",
-            "summary": summary
-        })
+            # Broadcast task completion to UI
+            await app.state.ws_manager.broadcast({
+                "type": "task_completed",
+                "summary": summary
+            })
 
-        return redact_sensitive_data({
-            "success": True,
-            "status": summary.get("status"),
-            "steps_passed": summary.get("steps_passed"),
-            "steps_total": summary.get("steps_total"),
-            "blocker_reason": summary.get("blocker_reason"),
-            "summary": summary
-        })
+            return redact_sensitive_data({
+                "success": True,
+                "status": summary.get("status"),
+                "steps_passed": summary.get("steps_passed"),
+                "steps_total": summary.get("steps_total"),
+                "blocker_reason": summary.get("blocker_reason"),
+                "summary": summary
+            })
+        except Exception as e:
+            logger.error(f"Error executing command in /api/command: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "status": "ERROR",
+                    "error": str(e),
+                    "blocker_reason": str(e),
+                    "summary": {"task": req.command, "status": "ERROR", "error": str(e)}
+                }
+            )
 
     # ──────────────────────────────────────────────────────────────────────────
     # REST API: Event Stream & Notifications (Phase 10)
@@ -673,32 +689,54 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
     async def get_memory(query: Optional[str] = Query(None)):
         eng: ZaraEngine = app.state.engine
         if not hasattr(eng, "memory") or not eng.memory:
-            return {"entries": [], "count": 0, "lessons_count": 0, "recent_lessons": []}
+            return {"status": "degraded", "entries": [], "count": 0, "lessons_count": 0, "recent_lessons": [], "stats": {}}
 
-        if query:
-            clean_q = sanitize_xss(query)
-            results = eng.memory.search_lessons(clean_q, limit=10)
-        else:
-            results = eng.memory.get_all_entries() if hasattr(eng.memory, "get_all_entries") else []
+        try:
+            if query:
+                clean_q = sanitize_xss(query)
+                results = eng.memory.search_lessons(clean_q, limit=10)
+            else:
+                results = eng.memory.get_all_entries() if hasattr(eng.memory, "get_all_entries") else []
 
-        stats = eng.memory.get_stats().to_dict() if hasattr(eng.memory, "get_stats") else {}
+            stats = eng.memory.get_stats().to_dict() if hasattr(eng.memory, "get_stats") else {}
 
-        return redact_sensitive_data({
-            "entries": results[:20],
-            "count": len(results),
-            "lessons_count": len(results),
-            "recent_lessons": results[:20],
-            "stats": stats
-        })
+            return redact_sensitive_data({
+                "status": "healthy",
+                "entries": results[:20],
+                "count": len(results),
+                "lessons_count": len(results),
+                "recent_lessons": results[:20],
+                "stats": stats
+            })
+        except Exception as e:
+            logger.error(f"Error fetching memory in /api/memory: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "degraded",
+                    "entries": [],
+                    "count": 0,
+                    "lessons_count": 0,
+                    "recent_lessons": [],
+                    "stats": {"total_memories": 0, "active_memories": 0, "by_type": {}, "by_scope": {}},
+                    "error": str(e)
+                }
+            )
 
     @app.get("/api/memory/stats")
     async def get_memory_stats():
         eng: ZaraEngine = app.state.engine
         if not hasattr(eng, "memory") or not eng.memory:
-            return {"total_memories": 0, "by_type": {}, "by_scope": {}, "active_memories": 0, "conflict_count": 0}
-        if hasattr(eng.memory, "get_stats"):
-            return eng.memory.get_stats().to_dict()
-        return {"total_memories": 0}
+            return {"total_memories": 0, "by_type": {}, "by_scope": {}, "active_memories": 0, "conflict_count": 0, "status": "degraded"}
+        try:
+            if hasattr(eng.memory, "get_stats"):
+                stats_dict = eng.memory.get_stats().to_dict()
+                stats_dict["status"] = "healthy"
+                return stats_dict
+            return {"total_memories": 0, "status": "healthy"}
+        except Exception as e:
+            logger.error(f"Error in /api/memory/stats: {e}", exc_info=True)
+            return {"total_memories": 0, "by_type": {}, "by_scope": {}, "active_memories": 0, "conflict_count": 0, "status": "degraded", "error": str(e)}
 
     @app.get("/api/memory/search")
     async def search_memory(
@@ -710,51 +748,59 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
     ):
         eng: ZaraEngine = app.state.engine
         if not hasattr(eng, "memory") or not eng.memory:
-            return {"results": [], "count": 0}
+            return {"results": [], "count": 0, "status": "degraded"}
 
-        clean_q = sanitize_xss(q)
-        from modules.memory import MemoryScope, MemoryType
-        scope_enum = None
-        if scope:
-            try:
-                scope_enum = MemoryScope(scope.upper())
-            except ValueError:
-                pass
-        type_enum = None
-        if type:
-            try:
-                type_enum = MemoryType(type.upper())
-            except ValueError:
-                pass
+        try:
+            clean_q = sanitize_xss(q)
+            from modules.memory import MemoryScope, MemoryType
+            scope_enum = None
+            if scope:
+                try:
+                    scope_enum = MemoryScope(scope.upper())
+                except ValueError:
+                    pass
+            type_enum = None
+            if type:
+                try:
+                    type_enum = MemoryType(type.upper())
+                except ValueError:
+                    pass
 
-        if hasattr(eng.memory, "retrieve"):
-            items = eng.memory.retrieve(
-                query=clean_q,
-                project_id=project_id,
-                scope=scope_enum,
-                memory_type=type_enum,
-                limit=limit
-            )
-            data = [item.to_dict() for item in items]
-            return redact_sensitive_data({"results": data, "count": len(data)})
-        return {"results": [], "count": 0}
+            if hasattr(eng.memory, "retrieve"):
+                items = eng.memory.retrieve(
+                    query=clean_q,
+                    project_id=project_id,
+                    scope=scope_enum,
+                    memory_type=type_enum,
+                    limit=limit
+                )
+                data = [item.to_dict() for item in items]
+                return redact_sensitive_data({"results": data, "count": len(data), "status": "healthy"})
+            return {"results": [], "count": 0, "status": "healthy"}
+        except Exception as e:
+            logger.error(f"Error in /api/memory/search: {e}", exc_info=True)
+            return {"results": [], "count": 0, "status": "degraded", "error": str(e)}
 
     @app.get("/api/memory/conflicts")
     async def get_memory_conflicts(status: Optional[str] = Query(None)):
         eng: ZaraEngine = app.state.engine
         if not hasattr(eng, "memory") or not eng.memory:
-            return {"conflicts": [], "count": 0}
-        from modules.memory import ConflictStatus
-        st = None
-        if status:
-            try:
-                st = ConflictStatus(status.upper())
-            except ValueError:
-                pass
-        if hasattr(eng.memory, "get_conflicts"):
-            confs = eng.memory.get_conflicts(status=st)
-            return redact_sensitive_data({"conflicts": [c.to_dict() for c in confs], "count": len(confs)})
-        return {"conflicts": [], "count": 0}
+            return {"conflicts": [], "count": 0, "status": "degraded"}
+        try:
+            from modules.memory import ConflictStatus
+            st = None
+            if status:
+                try:
+                    st = ConflictStatus(status.upper())
+                except ValueError:
+                    pass
+            if hasattr(eng.memory, "get_conflicts"):
+                confs = eng.memory.get_conflicts(status=st)
+                return redact_sensitive_data({"conflicts": [c.to_dict() for c in confs], "count": len(confs), "status": "healthy"})
+            return {"conflicts": [], "count": 0, "status": "healthy"}
+        except Exception as e:
+            logger.error(f"Error in /api/memory/conflicts: {e}", exc_info=True)
+            return {"conflicts": [], "count": 0, "status": "degraded", "error": str(e)}
 
     @app.post("/api/memory/explicit")
     async def store_explicit_memory(payload: Dict[str, Any] = Body(...)):

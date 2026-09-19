@@ -1410,7 +1410,10 @@ class ZaraEngine:
     # 7. PERSIST
     def persist(self, reflection: Reflection, project_id: Optional[str] = None) -> None:
         """Append reflection to memory/zara_log.md and extract structured memories."""
-        self.memory.append_reflection(reflection)
+        try:
+            self.memory.append_reflection(reflection)
+        except Exception as e:
+            audit_logger.log_event("REFLECTION_PERSIST_ERROR", {"error": str(e), "task": reflection.task})
         if hasattr(self, "memory_extractor") and self.memory_extractor:
             try:
                 pid = project_id or (self.project_manager.project.project_id if self.project_manager and getattr(self.project_manager, "project", None) else None)
@@ -1424,8 +1427,8 @@ class ZaraEngine:
                 )
                 for item in candidates:
                     self.memory.store_memory(item)
-            except Exception:
-                pass
+            except Exception as e:
+                audit_logger.log_event("STRUCTURED_MEMORY_PERSIST_ERROR", {"error": str(e), "task": reflection.task})
 
     # 8. CONTINUE OR REPORT (Full Loop)
     def run_task(

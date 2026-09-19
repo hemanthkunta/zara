@@ -371,7 +371,9 @@
     const memoryCountBadge = getEl("memory-count-badge");
     const memoryItemsList = getEl("memory-items-list");
 
-    if (data.stats) {
+    if (data.status === "degraded") {
+      if (memoryCountBadge) memoryCountBadge.textContent = "DEGRADED";
+    } else if (data.stats) {
       if (memStatActive) memStatActive.textContent = data.stats.active_memories || 0;
       if (memStatConflicts) memStatConflicts.textContent = data.stats.conflict_count || 0;
       if (memoryCountBadge) memoryCountBadge.textContent = `${data.stats.total_memories || 0} Items`;
@@ -711,10 +713,21 @@
   };
 
   const fetchMemory = async (signal) => {
-    const res = await fetch("/api/memory", { signal });
-    if (res.ok) {
-      const data = await res.json();
-      updateMemoryUI(data);
+    try {
+      const res = await fetch("/api/memory", { signal });
+      const contentType = res.headers.get("content-type") || "";
+      if (res.ok && contentType.includes("application/json")) {
+        const data = await res.json();
+        updateMemoryUI(data);
+      } else if (!res.ok) {
+        const badge = getEl("memory-count-badge");
+        if (badge) badge.textContent = "DEGRADED";
+      }
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        const badge = getEl("memory-count-badge");
+        if (badge) badge.textContent = "OFFLINE";
+      }
     }
   };
 
@@ -970,14 +983,25 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ command: cmd }),
           });
-          const data = await res.json();
-          if (res.ok) {
+
+          let data = null;
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            try {
+              data = await res.json();
+            } catch (jsonErr) {
+              data = null;
+            }
+          }
+
+          if (res.ok && data) {
             logTerminal(`Response: ${data.response || data.status || "Acknowledged"}`, "success");
             commandInput.value = "";
             scheduler.trigger("tasks");
             scheduler.trigger("world");
           } else {
-            logTerminal(`Error: ${data.detail || "Command failed"}`, "error");
+            const errMsg = (data && (data.detail || data.error || data.blocker_reason)) || (await res.text().catch(() => "")) || "Command execution failed";
+            logTerminal(`Error: ${errMsg}`, "error");
           }
         } catch (err) {
           logTerminal(`Network Error: ${err.message}`, "error");

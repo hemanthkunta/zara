@@ -295,9 +295,10 @@ class MemoryStore:
         memory_path: Path = MEMORY_FILE,
         db_path: Path = VECTORS_DB_PATH
     ):
-        self.memory_path = Path(memory_path)
+        self.memory_path = Path(memory_path).resolve()
         self.memory_dir = self.memory_path.parent
-        self.db_path = Path(db_path)
+        self.db_path = Path(db_path).resolve()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.vector_store = SemanticVectorStore(self.db_path)
         self._retrieval_counter = 0
 
@@ -307,14 +308,101 @@ class MemoryStore:
         self.decay_rate_days = 0.05
 
         self._ensure_exists()
-        self._init_tables()
+        self.ensure_schema()
+
+    def _init_tables_with_conn(self, conn: sqlite3.Connection) -> None:
+        """Create structured memory tables and indexes on an existing connection if not present."""
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS memories (
+                    memory_id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    summary TEXT,
+                    scope TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    importance REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    project_id TEXT,
+                    task_id TEXT,
+                    session_id TEXT,
+                    tags_json TEXT,
+                    embedding_reference TEXT,
+                    privacy_level TEXT NOT NULL,
+                    temporal_status TEXT NOT NULL,
+                    valid_from TEXT,
+                    valid_until TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_accessed TEXT,
+                    access_count INTEGER DEFAULT 0,
+                    decay_factor REAL DEFAULT 1.0,
+                    provenance_json TEXT,
+                    is_active INTEGER DEFAULT 1
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mem_type ON memories(type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mem_scope ON memories(scope)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mem_project ON memories(project_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mem_active ON memories(is_active)")
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS memory_conflicts (
+                    conflict_id TEXT PRIMARY KEY,
+                    memory_ids_json TEXT NOT NULL,
+                    detected_at TEXT NOT NULL,
+                    resolution_status TEXT NOT NULL,
+                    resolution_reason TEXT,
+                    resolved_memory_id TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_conflict_res ON memory_conflicts(resolution_status)")
+            conn.commit()
+        finally:
+            cursor.close()
+
+    def ensure_schema(self) -> None:
+        """Idempotently ensure all tables and indexes exist in the authoritative database."""
+        conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+        try:
+            self._init_tables_with_conn(conn)
+        finally:
+            conn.close()
+
+    def validate_schema(self) -> Tuple[bool, str]:
+        """Verify presence of all required tables and indexes."""
+        try:
+            conn = sqlite3.connect(str(self.db_path), timeout=5.0)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = {row[0] for row in cursor.fetchall()}
+                required_tables = {"memories", "memory_conflicts"}
+                missing = required_tables - tables
+                if missing:
+                    return False, f"Missing required tables: {', '.join(sorted(missing))}"
+                return True, "Schema valid"
+            finally:
+                conn.close()
+        except Exception as e:
+            return False, f"Database access error: {e}"
 
     @contextmanager
     def _connection(self, commit: bool = False) -> Iterator[sqlite3.Connection]:
-        """Context manager guaranteeing SQLite connection cleanup without ResourceWarnings."""
+        """Context manager guaranteeing SQLite connection cleanup, schema readiness, and no ResourceWarnings."""
         conn = sqlite3.connect(str(self.db_path), timeout=10.0)
         conn.row_factory = sqlite3.Row
         try:
+            # Self-healing schema validation: verify memories table exists
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'")
+                if not cursor.fetchone():
+                    self._init_tables_with_conn(conn)
+            finally:
+                cursor.close()
+
             yield conn
             if commit:
                 conn.commit()
@@ -343,55 +431,8 @@ class MemoryStore:
             PREFERENCES_FILE.write_text(json.dumps(default_prefs, indent=2), encoding="utf-8")
 
     def _init_tables(self) -> None:
-        """Create structured memory tables in SQLite database if not present."""
-        with self._connection(commit=True) as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS memories (
-                        memory_id TEXT PRIMARY KEY,
-                        type TEXT NOT NULL,
-                        content TEXT NOT NULL,
-                        summary TEXT,
-                        scope TEXT NOT NULL,
-                        confidence REAL NOT NULL,
-                        importance REAL NOT NULL,
-                        source TEXT NOT NULL,
-                        project_id TEXT,
-                        task_id TEXT,
-                        session_id TEXT,
-                        tags_json TEXT,
-                        embedding_reference TEXT,
-                        privacy_level TEXT NOT NULL,
-                        temporal_status TEXT NOT NULL,
-                        valid_from TEXT,
-                        valid_until TEXT,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        last_accessed TEXT,
-                        access_count INTEGER DEFAULT 0,
-                        decay_factor REAL DEFAULT 1.0,
-                        provenance_json TEXT,
-                        is_active INTEGER DEFAULT 1
-                    )
-                """)
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_mem_type ON memories(type)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_mem_scope ON memories(scope)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_mem_project ON memories(project_id)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_mem_active ON memories(is_active)")
-
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS memory_conflicts (
-                        conflict_id TEXT PRIMARY KEY,
-                        memory_ids_json TEXT NOT NULL,
-                        detected_at TEXT NOT NULL,
-                        resolution_status TEXT NOT NULL,
-                        resolution_reason TEXT,
-                        resolved_memory_id TEXT
-                    )
-                """)
-            finally:
-                cursor.close()
+        """Backward-compatible table initialization."""
+        self.ensure_schema()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Privacy & Secret Filtering

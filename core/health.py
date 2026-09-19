@@ -154,6 +154,16 @@ class GlobalHealthService:
                 return SubsystemHealth(name="Memory", status=SubsystemStatus.FAILED, message=f"Cannot initialize memory: {e}")
 
         try:
+            if hasattr(mem, "validate_schema"):
+                valid, schema_msg = mem.validate_schema()
+                if not valid:
+                    return SubsystemHealth(
+                        name="Memory",
+                        status=SubsystemStatus.DEGRADED,
+                        message=f"Memory schema invalid: {schema_msg}",
+                        details={"schema_error": schema_msg}
+                    )
+
             stats = mem.get_stats()
             return SubsystemHealth(
                 name="Memory",
