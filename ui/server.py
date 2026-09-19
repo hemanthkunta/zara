@@ -200,7 +200,10 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
     async def get_index():
         index_file = static_path / "index.html"
         if index_file.exists():
-            return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+            return HTMLResponse(
+                content=index_file.read_text(encoding="utf-8"),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+            )
         return HTMLResponse(content="<h1>ZARA Command Center</h1><p>Static index.html not yet initialized.</p>")
 
     # ──────────────────────────────────────────────────────────────────────────
