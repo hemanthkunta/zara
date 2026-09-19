@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import enum
+import hashlib
 import json
 import os
 import re
@@ -75,64 +76,33 @@ class EvaluationDimension(str, enum.Enum):
     USER_SATISFACTION = "USER_SATISFACTION"
 
 
-class UserFeedbackType(str, enum.Enum):
-    POSITIVE = "POSITIVE"
-    NEGATIVE = "NEGATIVE"
-    CORRECTION = "CORRECTION"
-    PREFERENCE = "PREFERENCE"
-    RATING = "RATING"
-
-
-class CandidateStatus(str, enum.Enum):
-    CANDIDATE = "CANDIDATE"
-    VALIDATING = "VALIDATING"
-    ACCEPTED = "ACCEPTED"
-    REJECTED = "REJECTED"
-    DEFERRED = "DEFERRED"
-
-
-class StrategyStatus(str, enum.Enum):
-    EXPERIMENTAL = "EXPERIMENTAL"
-    VALIDATED = "VALIDATED"
-    DEPRECATED = "DEPRECATED"
-    BLOCKED = "BLOCKED"
-
-
-class ChangeType(str, enum.Enum):
-    CONFIGURATION = "CONFIGURATION"
-    PROMPT_TEMPLATE = "PROMPT_TEMPLATE"
-    ROUTING_POLICY = "ROUTING_POLICY"
-    RETRIEVAL_POLICY = "RETRIEVAL_POLICY"
-    PLANNING_HEURISTIC = "PLANNING_HEURISTIC"
-    WORKER_ASSIGNMENT = "WORKER_ASSIGNMENT"
-    UI = "UI"
-    DOCUMENTATION = "DOCUMENTATION"
-    CODE = "CODE"
-
-
-class ProposalRisk(str, enum.Enum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    CRITICAL = "CRITICAL"
-
-
-class ProposalStatus(str, enum.Enum):
-    PROPOSED = "PROPOSED"
-    VALIDATING = "VALIDATING"
-    TESTING = "TESTING"
-    APPROVED = "APPROVED"
-    REJECTED = "REJECTED"
-    DEPLOYED = "DEPLOYED"
-    ROLLED_BACK = "ROLLED_BACK"
-
-
-class ExperimentStatus(str, enum.Enum):
-    PROPOSED = "PROPOSED"
-    RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    REJECTED = "REJECTED"
+from modules.strategies import (
+    StrategyStatus,
+    StrategyDomain,
+    Strategy,
+    StrategyRegistry,
+)
+from modules.improvement import (
+    ChangeType,
+    ProposalRisk,
+    ProposalStatus,
+    ImprovementProposal,
+    ImprovementVersion,
+)
+from modules.experiments import (
+    ExperimentStatus,
+    Experiment,
+)
+from modules.learning import (
+    CandidateStatus,
+    UserFeedbackType,
+    UserFeedback,
+    LearningCandidate,
+    FailurePattern,
+    ModelPerformanceObservation,
+    WorkerPerformanceObservation,
+    PlannerPerformanceObservation,
+)
 
 
 # =====================================================================
@@ -143,9 +113,11 @@ class ExperimentStatus(str, enum.Enum):
 class CriterionResult:
     criterion: str
     status: CriterionStatus
-    evidence: str
+    evidence: Any
     confidence: float = 1.0
     required: bool = True
+    score: float = 1.0
+    dimension: Optional[EvaluationDimension] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -154,17 +126,22 @@ class CriterionResult:
             "evidence": self.evidence,
             "confidence": self.confidence,
             "required": self.required,
+            "score": self.score,
+            "dimension": self.dimension.value if self.dimension else None,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> CriterionResult:
         status_val = data.get("status", CriterionStatus.UNKNOWN.value)
+        dim_val = data.get("dimension")
         return cls(
             criterion=data.get("criterion", ""),
             status=CriterionStatus(status_val) if isinstance(status_val, str) else status_val,
             evidence=data.get("evidence", ""),
             confidence=float(data.get("confidence", 1.0)),
             required=bool(data.get("required", True)),
+            score=float(data.get("score", 1.0)),
+            dimension=EvaluationDimension(dim_val) if dim_val else None,
         )
 
 
@@ -239,428 +216,6 @@ class EvaluationResult:
         )
 
 
-@dataclass
-class UserFeedback:
-    feedback_id: str
-    task_id: Optional[str] = None
-    type: UserFeedbackType = UserFeedbackType.POSITIVE
-    raw_text: str = ""
-    rating: Optional[float] = None  # Normalized 0.0 to 1.0
-    correction: Optional[str] = None
-    created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "feedback_id": self.feedback_id,
-            "task_id": self.task_id,
-            "type": self.type.value if isinstance(self.type, UserFeedbackType) else str(self.type),
-            "raw_text": self.raw_text,
-            "rating": round(self.rating, 3) if self.rating is not None else None,
-            "correction": self.correction,
-            "created_at": self.created_at,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> UserFeedback:
-        ftype = data.get("type", UserFeedbackType.POSITIVE.value)
-        return cls(
-            feedback_id=data["feedback_id"],
-            task_id=data.get("task_id"),
-            type=UserFeedbackType(ftype) if isinstance(ftype, str) else ftype,
-            raw_text=data.get("raw_text", ""),
-            rating=float(data["rating"]) if data.get("rating") is not None else None,
-            correction=data.get("correction"),
-            created_at=data.get("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat()),
-        )
-
-
-@dataclass
-class LearningCandidate:
-    candidate_id: str
-    source: str  # task_evaluation, user_feedback, failure_diagnosis, worker_performance
-    lesson: str
-    evidence: Dict[str, Any] = field(default_factory=dict)
-    confidence: float = 0.85
-    scope: str = "GLOBAL"  # GLOBAL, PROJECT, TASK, DOMAIN
-    created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
-    status: CandidateStatus = CandidateStatus.CANDIDATE
-    memory_type: str = "EXPERIENCE"  # EXPERIENCE, ERROR_PATTERN, SUCCESS_PATTERN, USER_FEEDBACK
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "candidate_id": self.candidate_id,
-            "source": self.source,
-            "lesson": self.lesson,
-            "evidence": self.evidence,
-            "confidence": round(self.confidence, 3),
-            "scope": self.scope,
-            "created_at": self.created_at,
-            "status": self.status.value if isinstance(self.status, CandidateStatus) else str(self.status),
-            "memory_type": self.memory_type,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> LearningCandidate:
-        st = data.get("status", CandidateStatus.CANDIDATE.value)
-        return cls(
-            candidate_id=data["candidate_id"],
-            source=data.get("source", "task_evaluation"),
-            lesson=data.get("lesson", ""),
-            evidence=data.get("evidence", {}),
-            confidence=float(data.get("confidence", 0.85)),
-            scope=data.get("scope", "GLOBAL"),
-            created_at=data.get("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat()),
-            status=CandidateStatus(st) if isinstance(st, str) else st,
-            memory_type=data.get("memory_type", "EXPERIENCE"),
-        )
-
-
-@dataclass
-class FailurePattern:
-    failure_type: str
-    root_cause: str
-    context: Dict[str, Any]
-    successful_recovery: Optional[str] = None
-    confidence: float = 0.8
-    frequency: int = 1
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> FailurePattern:
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
-
-
-@dataclass
-class Strategy:
-    strategy_id: str
-    name: str
-    description: str
-    applicable_domains: List[str] = field(default_factory=list)
-    conditions: Dict[str, Any] = field(default_factory=dict)
-    steps: List[str] = field(default_factory=list)
-    evidence_count: int = 0
-    success_count: int = 0
-    failure_count: int = 0
-    success_rate: float = 0.0
-    confidence: float = 0.5
-    status: StrategyStatus = StrategyStatus.EXPERIMENTAL
-    version: int = 1
-    history: List[Dict[str, Any]] = field(default_factory=list)
-    created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
-
-    def record_outcome(self, success: bool, evidence: Optional[Dict[str, Any]] = None) -> None:
-        """Record an execution outcome and update metrics and validation status."""
-        self.evidence_count += 1
-        if success:
-            self.success_count += 1
-        else:
-            self.failure_count += 1
-        self.success_rate = round(self.success_count / self.evidence_count, 3)
-
-        # Confidence scales with sample size and success rate
-        sample_factor = min(1.0, self.evidence_count / 10.0)
-        self.confidence = round(0.5 * sample_factor + 0.5 * self.success_rate * sample_factor, 3)
-
-        self.history.append({
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "success": success,
-            "evidence": evidence or {},
-            "version": self.version,
-            "success_rate": self.success_rate,
-        })
-        self.updated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-        # Validation check
-        if (
-            self.status == StrategyStatus.EXPERIMENTAL
-            and self.evidence_count >= STRATEGY_MIN_EVIDENCE_THRESHOLD
-            and self.success_rate >= STRATEGY_VALIDATION_SUCCESS_RATE
-        ):
-            self.status = StrategyStatus.VALIDATED
-        elif (
-            self.status == StrategyStatus.VALIDATED
-            and self.evidence_count >= 5
-            and self.success_rate < (STRATEGY_VALIDATION_SUCCESS_RATE - 0.15)
-        ):
-            self.status = StrategyStatus.DEPRECATED
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "strategy_id": self.strategy_id,
-            "name": self.name,
-            "description": self.description,
-            "applicable_domains": list(self.applicable_domains),
-            "conditions": dict(self.conditions),
-            "steps": list(self.steps),
-            "evidence_count": self.evidence_count,
-            "success_count": self.success_count,
-            "failure_count": self.failure_count,
-            "success_rate": self.success_rate,
-            "confidence": self.confidence,
-            "status": self.status.value if isinstance(self.status, StrategyStatus) else str(self.status),
-            "version": self.version,
-            "history": self.history,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Strategy:
-        st = data.get("status", StrategyStatus.EXPERIMENTAL.value)
-        return cls(
-            strategy_id=data["strategy_id"],
-            name=data.get("name", ""),
-            description=data.get("description", ""),
-            applicable_domains=data.get("applicable_domains", []),
-            conditions=data.get("conditions", {}),
-            steps=data.get("steps", []),
-            evidence_count=int(data.get("evidence_count", 0)),
-            success_count=int(data.get("success_count", 0)),
-            failure_count=int(data.get("failure_count", 0)),
-            success_rate=float(data.get("success_rate", 0.0)),
-            confidence=float(data.get("confidence", 0.5)),
-            status=StrategyStatus(st) if isinstance(st, str) else st,
-            version=int(data.get("version", 1)),
-            history=data.get("history", []),
-            created_at=data.get("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat()),
-            updated_at=data.get("updated_at", datetime.datetime.now(datetime.timezone.utc).isoformat()),
-        )
-
-
-@dataclass
-class ImprovementProposal:
-    proposal_id: str
-    title: str
-    description: str
-    source_evidence: Dict[str, Any]
-    expected_benefit: str
-    risk: ProposalRisk
-    affected_component: str
-    change_type: ChangeType
-    tests_required: List[str] = field(default_factory=list)
-    status: ProposalStatus = ProposalStatus.PROPOSED
-    diff_content: Optional[str] = None
-    created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
-    approved_by: Optional[str] = None
-    rejection_reason: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "proposal_id": self.proposal_id,
-            "title": self.title,
-            "description": self.description,
-            "source_evidence": self.source_evidence,
-            "expected_benefit": self.expected_benefit,
-            "risk": self.risk.value if isinstance(self.risk, ProposalRisk) else str(self.risk),
-            "affected_component": self.affected_component,
-            "change_type": self.change_type.value if isinstance(self.change_type, ChangeType) else str(self.change_type),
-            "tests_required": list(self.tests_required),
-            "status": self.status.value if isinstance(self.status, ProposalStatus) else str(self.status),
-            "diff_content": self.diff_content,
-            "created_at": self.created_at,
-            "approved_by": self.approved_by,
-            "rejection_reason": self.rejection_reason,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> ImprovementProposal:
-        risk_val = data.get("risk", ProposalRisk.MEDIUM.value)
-        ctype_val = data.get("change_type", ChangeType.CONFIGURATION.value)
-        status_val = data.get("status", ProposalStatus.PROPOSED.value)
-        return cls(
-            proposal_id=data["proposal_id"],
-            title=data.get("title", ""),
-            description=data.get("description", ""),
-            source_evidence=data.get("source_evidence", {}),
-            expected_benefit=data.get("expected_benefit", ""),
-            risk=ProposalRisk(risk_val) if isinstance(risk_val, str) else risk_val,
-            affected_component=data.get("affected_component", ""),
-            change_type=ChangeType(ctype_val) if isinstance(ctype_val, str) else ctype_val,
-            tests_required=data.get("tests_required", []),
-            status=ProposalStatus(status_val) if isinstance(status_val, str) else status_val,
-            diff_content=data.get("diff_content"),
-            created_at=data.get("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat()),
-            approved_by=data.get("approved_by"),
-            rejection_reason=data.get("rejection_reason"),
-        )
-
-
-@dataclass
-class Experiment:
-    experiment_id: str
-    hypothesis: str
-    baseline: Dict[str, Any]
-    candidate: Dict[str, Any]
-    metrics: Dict[str, float] = field(default_factory=dict)
-    sample_size: int = 0
-    target_sample_size: int = 5
-    results: Dict[str, Any] = field(default_factory=dict)
-    status: ExperimentStatus = ExperimentStatus.PROPOSED
-    created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
-    completed_at: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "experiment_id": self.experiment_id,
-            "hypothesis": self.hypothesis,
-            "baseline": self.baseline,
-            "candidate": self.candidate,
-            "metrics": self.metrics,
-            "sample_size": self.sample_size,
-            "target_sample_size": self.target_sample_size,
-            "results": self.results,
-            "status": self.status.value if isinstance(self.status, ExperimentStatus) else str(self.status),
-            "created_at": self.created_at,
-            "completed_at": self.completed_at,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Experiment:
-        st = data.get("status", ExperimentStatus.PROPOSED.value)
-        return cls(
-            experiment_id=data["experiment_id"],
-            hypothesis=data.get("hypothesis", ""),
-            baseline=data.get("baseline", {}),
-            candidate=data.get("candidate", {}),
-            metrics=data.get("metrics", {}),
-            sample_size=int(data.get("sample_size", 0)),
-            target_sample_size=int(data.get("target_sample_size", 5)),
-            results=data.get("results", {}),
-            status=ExperimentStatus(st) if isinstance(st, str) else st,
-            created_at=data.get("created_at", datetime.datetime.now(datetime.timezone.utc).isoformat()),
-            completed_at=data.get("completed_at"),
-        )
-
-
-@dataclass
-class ImprovementVersion:
-    version_id: str
-    proposal_id: str
-    parent_version: Optional[str]
-    changes: Dict[str, Any]
-    tests: List[str]
-    metrics: Dict[str, Any]
-    created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
-    status: str = "ACTIVE"  # ACTIVE, ROLLED_BACK
-    rollback_target: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> ImprovementVersion:
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
-
-
-# =====================================================================
-# Strategy Registry
-# =====================================================================
-
-class StrategyRegistry:
-    """Thread-safe registry of versioned, observable execution strategies."""
-
-    def __init__(self, storage_file: Path = STRATEGIES_FILE):
-        self.storage_file = storage_file
-        self._lock = threading.RLock()
-        self.strategies: Dict[str, Strategy] = {}
-        self._load()
-
-    def _load(self) -> None:
-        with self._lock:
-            if not self.storage_file.exists():
-                return
-            try:
-                data = json.loads(self.storage_file.read_text(encoding="utf-8"))
-                for s_data in data:
-                    strat = Strategy.from_dict(s_data)
-                    self.strategies[strat.strategy_id] = strat
-            except Exception as e:
-                audit_logger.log_event("STRATEGY_REGISTRY_LOAD_FAILED", {"error": str(e)})
-
-    def _save(self) -> None:
-        with self._lock:
-            try:
-                self.storage_file.parent.mkdir(parents=True, exist_ok=True)
-                serialized = [s.to_dict() for s in self.strategies.values()]
-                temp_file = self.storage_file.with_suffix(".tmp")
-                temp_file.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
-                temp_file.replace(self.storage_file)
-            except Exception as e:
-                audit_logger.log_event("STRATEGY_REGISTRY_SAVE_FAILED", {"error": str(e)})
-
-    def register(self, strategy: Strategy) -> Strategy:
-        with self._lock:
-            self.strategies[strategy.strategy_id] = strategy
-            self._save()
-            return strategy
-
-    def get(self, strategy_id: str) -> Optional[Strategy]:
-        with self._lock:
-            return self.strategies.get(strategy_id)
-
-    def list_strategies(
-        self,
-        status: Optional[StrategyStatus] = None,
-        domain: Optional[str] = None
-    ) -> List[Strategy]:
-        with self._lock:
-            result = list(self.strategies.values())
-            if status:
-                result = [s for s in result if s.status == status]
-            if domain:
-                d_lower = domain.lower()
-                result = [
-                    s for s in result
-                    if d_lower in [dom.lower() for dom in s.applicable_domains] or "general" in [dom.lower() for dom in s.applicable_domains]
-                ]
-            return result
-
-    def record_outcome(
-        self,
-        strategy_id: str,
-        success: bool,
-        evidence: Optional[Dict[str, Any]] = None
-    ) -> Optional[Strategy]:
-        with self._lock:
-            strat = self.strategies.get(strategy_id)
-            if not strat:
-                return None
-            strat.record_outcome(success, evidence)
-            self._save()
-            return strat
-
-    def deprecate(self, strategy_id: str, reason: str = "") -> bool:
-        with self._lock:
-            strat = self.strategies.get(strategy_id)
-            if not strat:
-                return False
-            strat.status = StrategyStatus.DEPRECATED
-            strat.history.append({
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "action": "DEPRECATED",
-                "reason": reason
-            })
-            self._save()
-            return True
-
-    def block(self, strategy_id: str, reason: str = "") -> bool:
-        with self._lock:
-            strat = self.strategies.get(strategy_id)
-            if not strat:
-                return False
-            strat.status = StrategyStatus.BLOCKED
-            strat.history.append({
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "action": "BLOCKED",
-                "reason": reason
-            })
-            self._save()
-            return True
-
-
 # =====================================================================
 # Evaluation Manager
 # =====================================================================
@@ -679,10 +234,16 @@ class EvaluationManager:
         evaluations_dir: Path = EVALUATIONS_DIR,
         proposals_dir: Path = IMPROVEMENTS_DIR,
         experiments_dir: Path = EXPERIMENTS_DIR,
+        strategies_file: Optional[Path] = None,
     ):
         self.memory = memory_store or MemoryStore()
         self.event_bus = event_bus
-        self.strategy_registry = strategy_registry or StrategyRegistry()
+        if strategy_registry is not None:
+            self.strategy_registry = strategy_registry
+        elif strategies_file is not None:
+            self.strategy_registry = StrategyRegistry(storage_file=strategies_file)
+        else:
+            self.strategy_registry = StrategyRegistry()
         self.evaluations_dir = evaluations_dir
         self.proposals_dir = proposals_dir
         self.experiments_dir = experiments_dir
@@ -846,9 +407,12 @@ class EvaluationManager:
         if context.blocker_reason:
             failures_list.append(context.blocker_reason)
 
-        quality_score = max(0.1, 1.0 - (len(context.diagnoses) * 0.15))
+        quality_score = max(0.0, 1.0 - (len(context.diagnoses) * 0.15))
         if not context.is_completed:
-            quality_score = min(quality_score, 0.4)
+            quality_score = 0.0
+            warnings_list.append(f"Task incomplete: {context.blocker_reason or 'No execution completion recorded'}")
+        if total_steps == 0:
+            warnings_list.append("No execution steps recorded")
 
         elapsed_time = max(0.1, time.time() - context.start_time)
         retries = context.total_retries
@@ -959,24 +523,26 @@ class EvaluationManager:
 
     def record_user_feedback(
         self,
-        raw_text: str,
+        raw_text: str = "",
         task_id: Optional[str] = None,
-        rating: Optional[float] = None
+        rating: Optional[float] = None,
+        feedback_type: Optional[Union[UserFeedbackType, str]] = None,
+        correction: Optional[str] = None
     ) -> UserFeedback:
         """
         Ingest and classify explicit user feedback into structured form.
         Extracts candidate memories and registers learning candidates.
         """
+        if correction and not raw_text:
+            raw_text = correction
         feedback_id = f"fb-{uuid.uuid4().hex[:8]}"
         clean_text = scrub_text(raw_text)
 
         lowered = clean_text.lower()
-        ftype = UserFeedbackType.POSITIVE
-
-        if rating is not None:
+        if feedback_type is not None:
+            ftype = UserFeedbackType(feedback_type) if isinstance(feedback_type, str) else feedback_type
+        elif rating is not None:
             ftype = UserFeedbackType.RATING
-            if rating > 1.0:
-                rating = min(1.0, rating / 10.0 if rating <= 10.0 else rating / 100.0)
         elif any(w in lowered for w in ("wrong", "bad", "failed", "incorrect", "don't do that", "stop")):
             ftype = UserFeedbackType.NEGATIVE
         elif any(w in lowered for w in ("instead", "next time", "correct approach", "fix:", "should be")):
@@ -985,6 +551,11 @@ class EvaluationManager:
             ftype = UserFeedbackType.PREFERENCE
         elif any(w in lowered for w in ("great", "good", "worked", "perfect", "thanks", "excellent")):
             ftype = UserFeedbackType.POSITIVE
+        else:
+            ftype = UserFeedbackType.POSITIVE
+
+        if rating is not None and rating > 1.0:
+            rating = min(1.0, rating / 10.0 if rating <= 10.0 else rating / 100.0)
 
         correction_text = None
         if ftype in (UserFeedbackType.CORRECTION, UserFeedbackType.PREFERENCE):
@@ -997,14 +568,16 @@ class EvaluationManager:
             raw_text=clean_text,
             rating=rating,
             correction=correction_text,
+            structured_tags=[ftype.value.lower()]
         )
 
         try:
             if hasattr(self.memory, "store_memory"):
+                mtype = MemoryType.PREFERENCE if ftype in (UserFeedbackType.PREFERENCE, UserFeedbackType.CORRECTION) else MemoryType.USER_FEEDBACK
                 self.memory.store_memory(MemoryItem(
                     memory_id=f"mem-fb-{feedback_id}",
-                    content=f"User feedback ({ftype.value}): {clean_text}",
-                    type=MemoryType.USER_FEEDBACK,
+                    content=f"User feedback ({ftype.value}): {clean_text}" if clean_text else f"User feedback ({ftype.value}): Rating {rating} for {task_id}",
+                    type=mtype,
                     scope=MemoryScope.GLOBAL,
                     source=MemorySource.USER_STATED,
                     confidence=0.95,
@@ -1035,6 +608,60 @@ class EvaluationManager:
 
         return feedback
 
+    def record_learning_candidate(
+        self,
+        source_task: str,
+        lesson: str,
+        evidence: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        confidence: float = 0.85,
+        status: CandidateStatus = CandidateStatus.CANDIDATE,
+        memory_type: str = "LESSON"
+    ) -> LearningCandidate:
+        """Record a structured learning candidate."""
+        cand = LearningCandidate(
+            candidate_id=f"cand-{uuid.uuid4().hex[:8]}",
+            source=source_task,
+            lesson=lesson,
+            evidence=evidence or {},
+            confidence=confidence,
+            scope="GLOBAL",
+            status=status,
+            memory_type=memory_type
+        )
+        with self._lock:
+            self.learning_candidates[cand.candidate_id] = cand
+
+        self._publish(EventType.LEARNING_CANDIDATE_CREATED, {
+            "candidate_id": cand.candidate_id,
+            "lesson": cand.lesson,
+            "source": cand.source
+        })
+        return cand
+
+    def _store_learning_in_memory(self, candidate: LearningCandidate) -> None:
+        """Persist a LearningCandidate into the MemoryStore."""
+        if not hasattr(self.memory, "store_memory"):
+            return
+        m_type = MemoryType.EXPERIENCE
+        if candidate.memory_type == "ERROR_PATTERN":
+            m_type = MemoryType.ERROR_PATTERN
+        elif candidate.memory_type in ("USER_FEEDBACK", "PREFERENCE"):
+            m_type = MemoryType.PREFERENCE
+        elif candidate.memory_type == "SUCCESS_PATTERN":
+            m_type = MemoryType.EXPERIENCE
+
+        self.memory.store_memory(MemoryItem(
+            memory_id=f"mem-{candidate.candidate_id}",
+            content=candidate.lesson,
+            type=m_type,
+            scope=MemoryScope.GLOBAL,
+            source=MemorySource.TASK_RESULT,
+            confidence=candidate.confidence,
+            privacy_level=PrivacyLevel.NORMAL,
+            metadata=candidate.evidence
+        ))
+
     # =================================================================
     # Lesson Extraction & Pattern Learning
     # =================================================================
@@ -1060,8 +687,9 @@ class EvaluationManager:
                 )
                 lesson_text = f"Failure: {pattern.failure_type} caused by '{pattern.root_cause[:120]}'. Recovery: {pattern.successful_recovery or 'Diagnostic retry'}."
 
+                err_hash = hashlib.sha256(lesson_text.encode("utf-8")).hexdigest()[:10]
                 cand = LearningCandidate(
-                    candidate_id=f"cand-err-{uuid.uuid4().hex[:8]}",
+                    candidate_id=f"cand-err-{err_hash}",
                     source="failure_diagnosis",
                     lesson=lesson_text,
                     evidence=pattern.to_dict(),
@@ -1090,8 +718,9 @@ class EvaluationManager:
         # 2. Success Pattern Learning
         if eval_result.task_success and eval_result.overall_score >= 0.85:
             lesson_text = f"Successful workflow for '{context.tag}': executed {len(context.steps)} steps with {eval_result.overall_score:.2f} score."
+            succ_hash = hashlib.sha256(lesson_text.encode("utf-8")).hexdigest()[:10]
             cand = LearningCandidate(
-                candidate_id=f"cand-succ-{uuid.uuid4().hex[:8]}",
+                candidate_id=f"cand-succ-{succ_hash}",
                 source="task_evaluation",
                 lesson=lesson_text,
                 evidence={"overall_score": eval_result.overall_score, "steps": len(context.steps)},
@@ -1238,27 +867,46 @@ class EvaluationManager:
 
     def record_plan_accuracy(
         self,
-        estimated_steps: int,
-        actual_steps: int,
-        estimated_runtime: float,
-        actual_runtime: float,
+        estimated_steps: int = 0,
+        actual_steps: int = 0,
+        estimated_runtime: float = 0.0,
+        actual_runtime: float = 0.0,
         replan_count: int = 0,
-        replan_success: bool = True
+        replan_success: bool = True,
+        task_type: Optional[str] = None,
+        step_count: Optional[int] = None,
+        steps_passed: Optional[int] = None,
+        retries: Optional[int] = None,
+        task_success: Optional[bool] = None,
+        **kwargs: Any
     ) -> Dict[str, Any]:
         """Evaluate plan estimation deviation and replanning effectiveness."""
-        step_deviation = abs(actual_steps - estimated_steps) / max(1, estimated_steps)
-        runtime_deviation = abs(actual_runtime - estimated_runtime) / max(1.0, estimated_runtime)
+        if step_count is not None:
+            estimated_steps = estimated_steps or step_count
+            actual_steps = actual_steps or (steps_passed if steps_passed is not None else step_count)
+        if task_success is not None:
+            replan_success = task_success
+
+        step_deviation = abs(actual_steps - estimated_steps) / max(1, estimated_steps) if estimated_steps > 0 else 0.0
+        runtime_deviation = abs(actual_runtime - estimated_runtime) / max(1.0, estimated_runtime) if estimated_runtime > 0.0 else 0.0
+        efficiency_factor = max(0.1, 1.0 - (replan_count * 0.15) - ((retries or 0) * 0.1))
 
         record = {
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "task_type": task_type or "general",
             "estimated_steps": estimated_steps,
             "actual_steps": actual_steps,
+            "step_count": step_count if step_count is not None else estimated_steps,
+            "steps_passed": steps_passed if steps_passed is not None else actual_steps,
             "step_deviation": round(step_deviation, 3),
             "estimated_runtime": estimated_runtime,
             "actual_runtime": actual_runtime,
             "runtime_deviation": round(runtime_deviation, 3),
             "replan_count": replan_count,
             "replan_success": replan_success,
+            "retries": retries or 0,
+            "efficiency_factor": round(efficiency_factor, 3),
+            "completion_rate": round(steps_passed / max(1, step_count), 3) if step_count else 1.0,
         }
         with self._lock:
             self.planning_evaluations.append(record)
@@ -1305,7 +953,8 @@ class EvaluationManager:
 
         forbidden_keywords = [
             "cyber_lab", "cyberlabscope", "security_scope", "authorization",
-            "confirmation_gate", "bypass_safety", "secret_redaction", "sandbox_bypass"
+            "confirmation_gate", "bypass_safety", "secret_redaction", "sandbox_bypass",
+            "auth", "authentication", "token", "permission", "privilege", "bypass",
         ]
         combined_text = f"{title} {description} {affected_component}".lower()
         if not is_blocked:
@@ -1463,8 +1112,25 @@ class EvaluationManager:
             return version
 
     def rollback(self, target_id: str) -> bool:
-        """Roll back a deployed proposal or version atomically."""
+        """Roll back a deployed proposal, version, or experiment atomically."""
         with self._lock:
+            # Check if target is an experiment
+            if target_id in self.experiments:
+                exp = self.experiments[target_id]
+                exp.status = ExperimentStatus.CANCELLED
+                self._save_experiment(exp)
+                self.record_learning_candidate(
+                    source_task=f"rollback_experiment_{exp.experiment_id}",
+                    lesson=f"Rollback executed for experiment {exp.experiment_id}: {exp.hypothesis}",
+                    evidence={"experiment_id": exp.experiment_id},
+                    tags=["rollback", "experiment"]
+                )
+                self._publish(EventType.IMPROVEMENT_ROLLED_BACK, {
+                    "target_id": target_id,
+                    "experiment_id": exp.experiment_id,
+                })
+                return True
+
             v = self.versions.get(target_id)
             proposal = None
 
@@ -1484,6 +1150,13 @@ class EvaluationManager:
 
             proposal.status = ProposalStatus.ROLLED_BACK
             self._save_proposal(proposal)
+
+            self.record_learning_candidate(
+                source_task=f"rollback_{proposal.proposal_id}",
+                lesson=f"Rollback executed for {proposal.title} ({proposal.proposal_id}). Ensure regression tests cover this scenario.",
+                evidence={"proposal_id": proposal.proposal_id, "affected_component": proposal.affected_component},
+                tags=["rollback", "regression", proposal.affected_component]
+            )
 
             self._publish(EventType.IMPROVEMENT_ROLLED_BACK, {
                 "target_id": target_id,
@@ -1529,10 +1202,16 @@ class EvaluationManager:
     def record_experiment_trial(
         self,
         experiment_id: str,
-        is_candidate: bool,
-        metrics: Dict[str, float]
+        is_candidate: Union[bool, Dict[str, float]] = True,
+        metrics: Optional[Dict[str, float]] = None
     ) -> Optional[Experiment]:
         """Record a single trial outcome for an active experiment."""
+        if isinstance(is_candidate, dict):
+            metrics = is_candidate
+            is_candidate = True
+        if metrics is None:
+            metrics = {}
+
         with self._lock:
             exp = self.experiments.get(experiment_id)
             if not exp or exp.status != ExperimentStatus.RUNNING:
@@ -1543,6 +1222,13 @@ class EvaluationManager:
                 exp.results[branch] = []
             exp.results[branch].append(metrics)
             exp.sample_size += 1
+
+            # Update running averages for metric keys
+            for k, v in metrics.items():
+                if isinstance(v, (int, float)):
+                    all_vals = [r[k] for r in exp.results.get(branch, []) if k in r and isinstance(r[k], (int, float))]
+                    if all_vals:
+                        exp.metrics[k] = round(sum(all_vals) / len(all_vals), 4)
 
             if exp.sample_size >= exp.target_sample_size:
                 self.complete_experiment(experiment_id)
@@ -1560,15 +1246,34 @@ class EvaluationManager:
             cand_runs = exp.results.get("candidate", [])
             base_runs = exp.results.get("baseline", [])
 
-            cand_avg = sum(r.get("success", 0) for r in cand_runs) / max(1, len(cand_runs))
-            base_avg = sum(r.get("success", 0) for r in base_runs) / max(1, len(base_runs))
+            # Candidate metrics
+            cand_scores = [r.get("score", r.get("success", 0.0)) for r in cand_runs]
+            if cand_scores:
+                cand_avg = sum(cand_scores) / len(cand_scores)
+            else:
+                cand_avg = float(exp.candidate.get("score", exp.candidate.get("success", 0.0)))
 
-            exp.metrics = {
+            # Baseline metrics
+            base_scores = [r.get("score", r.get("success", 0.0)) for r in base_runs]
+            if base_scores:
+                base_avg = sum(base_scores) / len(base_scores)
+            else:
+                base_avg = float(exp.baseline.get("score", exp.baseline.get("success", 0.0)))
+
+            improvement = cand_avg - base_avg
+            exp.metrics.update({
+                "candidate_score": round(cand_avg, 3),
+                "baseline_score": round(base_avg, 3),
                 "candidate_success_rate": round(cand_avg, 3),
                 "baseline_success_rate": round(base_avg, 3),
-                "improvement": round(cand_avg - base_avg, 3),
-            }
-            exp.status = ExperimentStatus.COMPLETED
+                "improvement": round(improvement, 3),
+            })
+
+            if improvement < 0.0:
+                exp.status = ExperimentStatus.FAILED
+            else:
+                exp.status = ExperimentStatus.COMPLETED
+
             exp.completed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
             self._save_experiment(exp)
 

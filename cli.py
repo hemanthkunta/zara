@@ -1096,6 +1096,62 @@ def cmd_learning(args):
             else:
                 print(f"{Colors.RED}✘ Rollback failed: target '{target_id}' not found.{Colors.END}")
 
+        elif action == "models":
+            models = getattr(eval_mgr, "model_metrics", {})
+            print(f"\n{Colors.BOLD}=== MODEL ROUTER LEARNING OBSERVATIONS ({len(models)}) ==={Colors.END}")
+            if not models:
+                print("No model observations recorded.")
+            for key, m in models.items():
+                sr = m.get("success_rate", 0.0) * 100
+                color = Colors.GREEN if sr >= 80 else (Colors.YELLOW if sr >= 50 else Colors.RED)
+                print(f"  [{key}] {color}{sr:.1f}% Success{Colors.END} | Latency: {m.get('average_latency', 0.0)}s | Total: {m.get('total_requests', 0)}")
+            print()
+
+        elif action == "workers":
+            workers = getattr(eval_mgr, "worker_metrics", {})
+            print(f"\n{Colors.BOLD}=== MULTI-AGENT WORKER LEARNING OBSERVATIONS ({len(workers)}) ==={Colors.END}")
+            if not workers:
+                print("No worker observations recorded.")
+            for wtype, wm in workers.items():
+                sr = wm.get("success_rate", 0.0) * 100
+                color = Colors.GREEN if sr >= 80 else (Colors.YELLOW if sr >= 50 else Colors.RED)
+                print(f"  [{wtype}] {color}{sr:.1f}% Success{Colors.END} | Runtime: {wm.get('average_runtime', 0.0)}s | Tools: {wm.get('total_tool_calls', 0)} | Retries: {wm.get('total_retries', 0)}")
+            print()
+
+        elif action == "evaluate":
+            task_text = getattr(args, "task", None)
+            if not task_text:
+                print(f"{Colors.RED}Please provide a task string to evaluate.{Colors.END}")
+                return
+            from core.state import TaskContext
+            ctx = TaskContext(task=task_text, tag="cli")
+            ctx.is_completed = True
+            eval_res = eval_mgr.evaluate_task_execution(ctx)
+            print(f"\n{Colors.GREEN}✔ Evaluated task: '{task_text}' (ID: {eval_res.evaluation_id}){Colors.END}")
+            print(f"  Overall Score: {eval_res.overall_score:.2f} | Quality: {eval_res.quality_score:.2f} | Efficiency: {eval_res.efficiency_score:.2f}")
+
+        elif action == "propose":
+            props = list(eval_mgr.proposals.values())
+            print(f"\n{Colors.BOLD}=== IMPROVEMENT PROPOSALS ({len(props)}) ==={Colors.END}")
+            if not props:
+                print("No proposals found.")
+            for p in props:
+                rc = Colors.RED if p.risk.value in ("HIGH", "CRITICAL") else Colors.GREEN
+                print(f"  [{p.proposal_id}] ({rc}{p.risk.value}{Colors.END}) {p.title} — {p.status.value}")
+
+        elif action == "validate":
+            target_id = getattr(args, "id", None)
+            if not target_id:
+                print(f"{Colors.RED}Please provide a proposal ID to validate.{Colors.END}")
+                return
+            ok = eval_mgr.validate_proposal(target_id)
+            if ok:
+                print(f"{Colors.GREEN}✔ Proposal '{target_id}' validated successfully.{Colors.END}")
+            else:
+                prop = eval_mgr.proposals.get(target_id)
+                reason = prop.rejection_reason if prop else "Not found or validation failed"
+                print(f"{Colors.RED}✘ Proposal '{target_id}' validation rejected: {reason}{Colors.END}")
+
     finally:
         engine.close()
 
@@ -1409,6 +1465,17 @@ def main():
 
     l_rollback = learning_sub.add_parser("rollback", help="Rollback an improvement proposal or version")
     l_rollback.add_argument("id", type=str, help="Proposal or Version ID to rollback")
+
+    learning_sub.add_parser("models", help="Display model router learning observations")
+    learning_sub.add_parser("workers", help="Display multi-agent worker learning observations")
+
+    l_eval = learning_sub.add_parser("evaluate", help="Manually evaluate a task description")
+    l_eval.add_argument("task", type=str, help="Task description to evaluate")
+
+    learning_sub.add_parser("propose", help="Show or propose workflow improvements")
+
+    l_val = learning_sub.add_parser("validate", help="Validate an improvement proposal")
+    l_val.add_argument("id", type=str, help="Proposal ID to validate")
 
     # health command (Phase 18)
     health_p = subparsers.add_parser("health", help="Check global health across all 16 ZARA subsystems")

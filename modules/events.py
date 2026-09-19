@@ -271,6 +271,29 @@ class EventBus:
         except Exception:
             pass
 
+    def get_recent_events(self, limit: int = 50) -> List[Event]:
+        """Return the most recent events from the events log file."""
+        if not self.events_file.exists():
+            return []
+        events: List[Event] = []
+        try:
+            with open(self.events_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    events.append(Event.from_dict(data))
+                    if len(events) >= limit:
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            return []
+        return events
+
     def subscribe(self, event_type: EventType, callback: Callable[[Event], None]) -> str:
         with self._lock:
             if event_type not in self._subscribers:

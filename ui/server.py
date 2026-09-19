@@ -1164,6 +1164,24 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Proposal not found")
         return {"success": True, "proposal_id": proposal_id}
 
+    @app.get("/api/learning/models")
+    async def get_learning_models():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {"models": {}}
+        return redact_sensitive_data({
+            "models": getattr(eng.evaluation_manager, "model_metrics", {})
+        })
+
+    @app.get("/api/learning/workers")
+    async def get_learning_workers():
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            return {"workers": {}}
+        return redact_sensitive_data({
+            "workers": getattr(eng.evaluation_manager, "worker_metrics", {})
+        })
+
     @app.post("/api/learning/rollback/{target_id}")
     async def rollback_learning_proposal(target_id: str):
         eng: ZaraEngine = app.state.engine
@@ -1173,6 +1191,16 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
         if not ok:
             raise HTTPException(status_code=404, detail=f"Target '{target_id}' not found for rollback")
         return {"success": True, "target_id": target_id}
+
+    @app.post("/api/learning/experiments/{experiment_id}/rollback")
+    async def rollback_learning_experiment(experiment_id: str):
+        eng: ZaraEngine = app.state.engine
+        if not hasattr(eng, "evaluation_manager") or not eng.evaluation_manager:
+            raise HTTPException(status_code=503, detail="EvaluationManager offline")
+        ok = eng.evaluation_manager.rollback(experiment_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Experiment '{experiment_id}' not found for rollback")
+        return {"success": True, "experiment_id": experiment_id}
 
     return app
 

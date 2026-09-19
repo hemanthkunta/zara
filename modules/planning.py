@@ -240,6 +240,17 @@ class PlanValidator:
             required_approvals=required_approvals,
         )
 
+    @classmethod
+    def validate_plan(cls, steps: Any) -> Tuple[bool, str]:
+        """Validate an executable plan step sequence."""
+        if not steps:
+            return False, "Plan contains no steps"
+        for step in steps:
+            desc = getattr(step, "description", "")
+            if not desc or not str(desc).strip():
+                return False, "Plan step missing description"
+        return True, "Plan valid"
+
 
 class HierarchicalPlanner:
     """Decomposes structured Goals into ordered, hierarchical task DAGs."""

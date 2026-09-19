@@ -217,7 +217,22 @@ Start an interactive chat session with ZARA:
 ./zara.py learning approve prop-12345678
 ./zara.py learning reject prop-12345678 --reason "Safety risk"
 
-# Atomically roll back a deployed improvement version
+# List and propose candidates
+./zara.py learning propose
+
+# Validate an improvement proposal in sandbox
+./zara.py learning validate prop-12345678
+
+# Inspect model router learning observations
+./zara.py learning models
+
+# Inspect specialist worker learning observations
+./zara.py learning workers
+
+# Evaluate a task across 6 objective dimensions
+./zara.py learning evaluate "Implement database indexing"
+
+# Atomically roll back a deployed improvement version or experiment
 ./zara.py learning rollback prop-12345678
 ```
 

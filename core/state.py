@@ -25,14 +25,16 @@ class ActionType(str, Enum):
     JOB_DRAFT = "job_draft"
     SECURITY_AUDIT = "security_audit"
     CONFIRMATION = "confirmation"
+    BASH = "execute"
 
 @dataclass
 class PlanStep:
-    id: int
-    title: str
-    action_type: ActionType
-    description: str
-    target: str
+    id: int = 1
+    title: str = ""
+    action_type: ActionType = ActionType.EXECUTE
+    description: str = ""
+    target: str = ""
+    step_id: Optional[str] = None
     payload: Dict[str, Any] = field(default_factory=dict)
     success_condition: str = "Command exits with return code 0"
     tool: Optional[str] = None
@@ -43,10 +45,17 @@ class PlanStep:
     failure_type: Optional[str] = None
     status: StepStatus = StepStatus.PENDING
     attempts: int = 0
+    retries: int = 0
     actual_output: Optional[str] = None
     error_message: Optional[str] = None
 
     def __post_init__(self):
+        if self.step_id and not self.title:
+            self.title = self.step_id
+        if self.retries and not self.attempts:
+            self.attempts = self.retries
+        elif self.attempts and not self.retries:
+            self.retries = self.attempts
         # Sync arguments and payload for backwards compatibility
         if self.arguments and not self.payload:
             self.payload = dict(self.arguments)
@@ -64,10 +73,11 @@ class ExecutionResult:
 
 @dataclass
 class Diagnosis:
-    attempt: int
-    failure_reason: str
-    hypothesis: str
-    proposed_fix: Dict[str, Any]
+    attempt: int = 1
+    failure_reason: str = ""
+    hypothesis: str = ""
+    proposed_fix: Any = field(default_factory=dict)
+    suggested_fix: Optional[str] = None
     root_cause_category: Optional[str] = None  # tool_arguments, command, code_logic, dependency, verification
     corrected_arguments: Optional[Dict[str, Any]] = None
     corrected_tool: Optional[str] = None
@@ -78,6 +88,14 @@ class Diagnosis:
     explanation: Optional[str] = None
     recommended_action: Optional[str] = None
     confidence: float = 1.0
+
+    def __post_init__(self):
+        if not self.hypothesis:
+            self.hypothesis = self.failure_reason
+        if self.suggested_fix and not self.proposed_fix:
+            self.proposed_fix = {"action": self.suggested_fix}
+        elif not self.proposed_fix:
+            self.proposed_fix = {"action": "retry"}
 
     def to_dict(self) -> Dict[str, Any]:
         return {

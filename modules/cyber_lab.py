@@ -263,6 +263,11 @@ class CyberLabScope:
             f"Host is not in the authorized lab allowlist. ZARA refuses to execute cybersecurity operations against unauthorized public targets."
         )
 
+    def is_target_allowed(self, host_or_url: str) -> bool:
+        """Check if target host or URL is authorized under CyberLabScope."""
+        allowed, _, _ = self.verify_target(host_or_url)
+        return allowed
+
     def validate_environment(self, target: CyberLabTarget) -> Tuple[bool, str]:
         """Verify that the target environment is responsive and matches lab markers."""
         if target.environment_type in ("localhost", "docker", "vm", "private_subnet"):
