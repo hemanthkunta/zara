@@ -206,6 +206,10 @@ def create_ui_app(engine: Optional[ZaraEngine] = None) -> FastAPI:
             )
         return HTMLResponse(content="<h1>ZARA Command Center</h1><p>Static index.html not yet initialized.</p>")
 
+    @app.get("/favicon.ico")
+    async def get_favicon():
+        return Response(status_code=204)
+
     # ──────────────────────────────────────────────────────────────────────────
     # WebSocket Endpoint
     # ──────────────────────────────────────────────────────────────────────────
